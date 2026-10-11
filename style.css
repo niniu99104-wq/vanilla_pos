@@ -515,6 +515,25 @@ details.adv .adv-body { padding: 14px 12px; display: flex; flex-direction: colum
 .lb-note { font-size: calc(5mm * var(--k)); margin-top: calc(2.5mm * var(--k)); border: .4mm solid #000; padding: 1.5mm 2.5mm; line-height: 1.35; word-break: break-all; }
 .lb-ship { font-size: calc(4.6mm * var(--k)); margin-top: calc(3mm * var(--k)); line-height: 1.4; word-break: break-all; }
 .lb-foot { margin-top: auto; padding-top: 1.5mm; display: flex; justify-content: space-between; gap: 3mm; font-size: 2.8mm; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 商品小標籤（預設 30×15mm）：第一行商品名稱、第二行製造日期，皆不換行、太長自動縮小。 */
+.plabel { width: var(--pw, var(--lw, 30mm)); height: var(--ph, var(--lh, 15mm)); box-sizing: border-box; padding: 1.2mm 1.5mm; background: #fff; color: #000; display: flex; flex-direction: column; justify-content: center; gap: .6mm; overflow: hidden; font-family: var(--font); line-height: 1.15; text-align: center; break-after: page; page-break-after: always; }
+.pl-name { font-size: 4.2mm; font-weight: 700; }
+.pl-date { font-size: 2.7mm; font-variant-numeric: tabular-nums; }
+.plabel-preview { align-items: center; }
+.pl-sample { display: flex; align-items: center; gap: 8px; }
+.label-preview .plabel { zoom: 2; border: 1px solid var(--border); break-after: auto; }
+/* 商品標籤頁 */
+.pl-tools { display: flex; gap: 14px 20px; flex-wrap: wrap; align-items: flex-start; }
+.pl-tools .grow { flex: 1 1 320px; }
+.pl-tools input[type="date"] { width: auto; }
+.pl-from { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pl-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto 36px; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--border); font-size: 15px; }
+.pl-row:first-child { border-top: 0; }
+.pl-text { font-weight: 500; word-break: break-all; }
+.pl-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 12px; }
+.pl-foot b { font-size: 16px; }
+.pl-add { display: inline-flex; align-items: center; gap: 6px; }
+.pl-add .input { width: 60px; min-height: 34px; padding: 4px 8px; text-align: center; }
 .print-dlg { width: min(720px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; }
 .print-dlg[open] { display: flex; }
 .print-body { overflow-y: auto; margin-top: 8px; }
@@ -524,5 +543,5 @@ details.adv .adv-body { padding: 14px 12px; display: flex; flex-direction: colum
   html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
   body > *:not(#print-root) { display: none !important; }
   #print-root { display: block !important; position: static !important; visibility: visible !important; }
-  #print-root .label:last-child { break-after: auto; page-break-after: auto; }
+  #print-root .label:last-child, #print-root .plabel:last-child { break-after: auto; page-break-after: auto; }
 }
