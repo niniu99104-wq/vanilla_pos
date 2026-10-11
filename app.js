@@ -170,8 +170,21 @@ const { isMock, ApiError, api } = (() => {
     constructor(code, message) { super(message); this.code = code; }
   }
 
+  // 只讀取、不寫入的動作：遇到連線或後端暫時性錯誤時可以安全地自動重試一次。寫入類動作絕不自動重送。
+  const READ_ONLY = new Set(['me', 'catalog']);
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+
   async function call(action, args = {}) {
     if (isMock) { return mockCall(action, args); }
+    try { return await callOnce(action, args); }
+    catch (e) {
+      if (!READ_ONLY.has(action) || !['NETWORK', 'BAD_RESPONSE'].includes(e.code)) throw e;
+      await pause(900);
+      return callOnce(action, args);
+    }
+  }
+
+  async function callOnce(action, args) {
     let token = '';
     if (action !== 'login') {
       const session = getSession();
@@ -179,7 +192,7 @@ const { isMock, ApiError, api } = (() => {
       token = session.token;
     }
     const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
-    let res;
+    let res, text;
     try {
       // 用 text/plain 送出可避免瀏覽器預檢請求（Apps Script 不回應預檢）。
       res = await fetch(CONFIG.API_URL, {
@@ -187,13 +200,18 @@ const { isMock, ApiError, api } = (() => {
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ token, action, args })
       });
+      text = await res.text();
     } catch (e) {
       if (e.name === 'AbortError') throw new ApiError('TIMEOUT', '連線逾時。若剛才是在儲存，請先重新整理確認資料是否已寫入，不要直接再按一次。');
       throw new ApiError('NETWORK', '無法連線到後端，請檢查網路。');
     } finally { clearTimeout(timer); }
     let json;
-    try { json = await res.json(); }
-    catch { throw new ApiError('ERROR', '後端回應格式不正確。請確認 Apps Script 已部署為「網頁應用程式」、存取權為「所有人」，且 config.js 的網址結尾是 /exec。'); }
+    try { json = JSON.parse(text); }
+    catch {
+      // 後端回的不是資料而是 Google 的錯誤頁：把頁面裡的文字抓出來顯示，才知道真正原因。
+      const plain = String(text || '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
+      throw new ApiError('BAD_RESPONSE', `後端沒有回傳資料（${action}，HTTP ${res.status}）。Google 回應的內容：${plain ? plain.slice(0, 260) : '（空白）'}`);
+    }
     if (!json || !json.ok) {
       const code = (json && json.code) || 'ERROR';
       if (code === 'AUTH') { clearSession(); window.dispatchEvent(new Event('vp:auth')); }
