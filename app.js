@@ -585,19 +585,46 @@ const mountProducts = (() => {
  *   已送出列印＝已開啟列印視窗；列印成功＝列印後由使用者確認已正常出紙。
  */
 function labelHtml(l, brand) {
-  const when = `${fmtDay(l.date)}${l.time ? ' ' + l.time : ''}`;
-  const body = l.items
-    ? `<div class="lb-list">${l.items.map(i => `<div><span>${esc(i.product)}${i.variant ? ' ' + esc(i.variant) : ''}</span><b>×${esc(i.quantity)}</b></div>${i.note ? `<div class="lb-inote">${esc(i.note)}</div>` : ''}`).join('')}</div>`
-    : `<div class="lb-product">${esc(l.product)}</div><div class="lb-variant">${esc(l.variant)}</div>`;
+  const pickup = l.delivery === '工作室自取', cvs = l.delivery === '常溫超商店到店';
+  // 蛋糕：一張一顆，商品名稱＋規格。常溫：整筆一張，只有一種品項時用同樣的大字排版，多種品項時逐項列出。
+  const items = l.items || [{ product: l.product, variant: l.variant, quantity: 0, note: l.note }];
+  const main = items.length === 1
+    ? `<div class="lb-product fit">${esc(items[0].product)}</div><div class="lb-variant fit">${esc(items[0].variant)}${items[0].quantity ? `<small> ×${esc(items[0].quantity)}</small>` : ''}</div>`
+    : `<div class="lb-items">${items.map(i => `<div class="lb-item"><div class="lb-item-name fit">${esc(i.product)}</div><div class="lb-item-var fit">${esc(i.variant)} <b>×${esc(i.quantity)}</b></div></div>`).join('')}</div>`;
+  const notes = [...new Set(items.map(i => (i.note || '').trim()).filter(Boolean).map(n => items.length > 1 ? n : n))];
+  const addons = (l.addons || []).map(a => `${esc(a.name)} ×${esc(a.quantity)}`).join('、');
   return `<div class="label">
-    <div class="lb-top"><span class="lb-brand">${esc(brand)}</span><span class="lb-id">${esc(shortId(l.orderId))}</span></div>
-    <div class="lb-name">${esc(l.name)}</div>
-    ${body}
-    <div class="lb-bottom">
-      <div class="lb-row"><span>${esc(l.delivery)}</span><b>${esc(when)}</b></div>
-      ${l.note ? `<div class="lb-note">${esc(l.note)}</div>` : ''}
+    <div class="lb-clip"></div>
+    <div class="lb-body">
+      <div class="lb-name fit">${esc(l.name)}</div>
+      <div class="lb-phone">${esc(l.phone || '')}</div>
+      ${main}
+      <div class="lb-cap">${pickup ? '取貨日' : '出貨日'}・${esc(l.delivery)}${l.of > 1 ? `・第 ${esc(l.unit)}／${esc(l.of)} 顆` : ''}</div>
+      <div class="lb-date">${esc(fmtDay(l.date))}</div>
+      ${l.time ? `<div class="lb-time">${esc(l.time)}</div>` : ''}
+      ${addons ? `<div class="lb-addons"><span>加購</span>${addons}</div>` : ''}
+      ${notes.length || l.orderNote ? `<div class="lb-note">${notes.map(esc).join('／')}${notes.length && l.orderNote ? '<br>' : ''}${l.orderNote ? esc(l.orderNote) : ''}</div>` : ''}
+      ${pickup ? '' : `<div class="lb-ship"><div><span>收件人</span>${esc(l.recipient || l.name)}　${esc(l.recipientPhone || l.phone || '')}</div><div><span>${cvs ? '門市' : '地址'}</span>${esc(l.address || '')}</div></div>`}
+      <div class="lb-foot"><span>${esc(l.orderId)}</span><span>應收 ${money(l.total)}・已收 ${money(l.paid)}</span></div>
     </div>
   </div>`;
+}
+/**
+ * 讓標籤內容剛好放進版面：
+ *  1. 整張內容超出高度時，等比例縮小字級（最多縮到 60%）。
+ *  2. 標記為 .fit 的那一行（商品名稱、規格、姓名）不換行；太長時只縮小那一行的字，直到放得下。
+ */
+function fitLabels(root) {
+  root.querySelectorAll('.label').forEach(label => {
+    const body = label.querySelector('.lb-body'); if (!body) return;
+    let k = 1; label.style.setProperty('--k', k);
+    while (body.scrollHeight > body.clientHeight + 1 && k > 0.6) { k -= 0.04; label.style.setProperty('--k', k.toFixed(2)); }
+    label.querySelectorAll('.fit').forEach(el => {
+      el.style.fontSize = '';
+      let size = parseFloat(getComputedStyle(el).fontSize); const min = size * 0.4;
+      while (el.scrollWidth > el.clientWidth + 1 && size > min) { size *= 0.96; el.style.fontSize = size + 'px'; }
+    });
+  });
 }
 
 async function printLabels(orderIds) {
@@ -617,6 +644,7 @@ async function printLabels(orderIds) {
     else {
       body.innerHTML = `<p class="muted small">共 ${data.labels.length} 張，尺寸 ${esc(data.width)} × ${esc(data.height)} mm。按「列印」後會開啟瀏覽器的列印視窗，請選擇標籤印表機，紙張選 ${esc(data.width)}×${esc(data.height)}mm、邊界選「無」。</p>
         <div class="label-preview" style="--lw:${Number(data.width)}mm;--lh:${Number(data.height)}mm">${data.labels.map(l => labelHtml(l, data.brand)).join('')}</div>`;
+      fitLabels(body);
       go.disabled = false; go.textContent = `列印 ${data.labels.length} 張`;
     }
   } catch (e) { body.innerHTML = emptyHtml('標籤讀取失敗', e.message); }
@@ -626,6 +654,7 @@ async function printLabels(orderIds) {
     if (!root) { root = document.createElement('div'); root.id = 'print-root'; document.body.append(root); }
     root.style.setProperty('--lw', Number(data.width) + 'mm'); root.style.setProperty('--lh', Number(data.height) + 'mm');
     root.innerHTML = data.labels.map(l => labelHtml(l, data.brand)).join('');
+    fitLabels(root);
     let page = document.getElementById('print-page-size');
     if (!page) { page = document.createElement('style'); page.id = 'print-page-size'; document.head.append(page); }
     page.textContent = `@page { size: ${Number(data.width)}mm ${Number(data.height)}mm; margin: 0; }`;
