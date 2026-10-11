@@ -7,5 +7,5 @@
  * 留空 = 示範模式：使用內建的假商品，不會讀寫您的試算表。
  */
 export const CONFIG = {
-  API_URL: ''
+  API_URL: 'https://script.google.com/macros/s/AKfycbx3gBcfdN3jRABWp2z12uVWH-8qUJAvfAGwyG2kMjKbnfvjYh8s1q6YdgIjUKNp58tL/exec'
 };
