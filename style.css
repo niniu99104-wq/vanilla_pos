@@ -1,0 +1,122 @@
+/* Vanilla POS — 基礎樣式與版面 */
+:root {
+  --primary: #8199A3;
+  --primary-dark: #627D88;
+  --background: #F8F7F4;
+  --surface: #FFFFFF;
+  --text: #303B40;
+  --text-secondary: #7B8588;
+  --border: #E4E8E7;
+  --sage: #A9B9AA;
+  --danger: #C7837C;
+  --warning: #D5B783;
+  --success: #7FA38B;
+
+  --primary-soft: #EEF2F3;
+  --sage-soft: #EEF2EE;
+  --danger-soft: #F8ECEA;
+  --warning-soft: #F8F1E3;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --side-w: 208px;
+  --nav-h: 60px;
+  --font: "Noto Sans TC", -apple-system, BlinkMacSystemFont, "PingFang TC", "Helvetica Neue", "Microsoft JhengHei", sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--background); color: var(--text);
+  font-family: var(--font); font-size: 15px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, p { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--primary-dark); }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.boot { padding: 48px 16px; text-align: center; color: var(--text-secondary); }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-secondary); }
+.small { font-size: 13px; }
+[hidden] { display: none !important; }
+
+/* ── 版面：桌面左側固定導覽 ── */
+.shell { min-height: 100vh; min-height: 100dvh; }
+.side {
+  position: fixed; inset: 0 auto 0 0; width: var(--side-w);
+  background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: 24px 12px 16px;
+}
+.brand { padding: 0 12px 24px; }
+.brand-name { font-size: 22px; font-weight: 700; letter-spacing: .02em; line-height: 1.2; }
+.brand-name span { color: var(--primary); }
+.brand-sub { font-size: 12px; color: var(--text-secondary); letter-spacing: .14em; margin-top: 4px; }
+.side-nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
+.nav-link {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--radius-sm);
+  color: var(--text-secondary); text-decoration: none; font-size: 14px;
+}
+.nav-link svg { width: 18px; height: 18px; flex: none; }
+.nav-link:hover { background: var(--background); color: var(--text); }
+.nav-link.active { background: var(--primary-soft); color: var(--primary-dark); font-weight: 500; }
+.nav-link .soon { margin-left: auto; font-size: 11px; color: var(--text-secondary); opacity: .75; }
+.side-user { border-top: 1px solid var(--border); padding: 12px 12px 0; font-size: 12px; color: var(--text-secondary); }
+.side-user .email { word-break: break-all; margin-bottom: 6px; }
+.linklike { background: none; border: 0; padding: 0; color: var(--primary-dark); text-decoration: underline; font-size: 12px; }
+
+.main { margin-left: var(--side-w); padding: 32px 36px 56px; max-width: 1240px; }
+.banner {
+  margin-left: var(--side-w); background: var(--warning-soft); color: #7A6233;
+  border-bottom: 1px solid #EADFC6; padding: 8px 36px; font-size: 13px;
+}
+.bottom-nav { display: none; }
+
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.page-head h1 { font-size: 24px; font-weight: 700; line-height: 1.3; }
+.page-head .sub { color: var(--text-secondary); font-size: 13px; margin-top: 2px; }
+
+/* ── 手機：底部主要導覽 ── */
+@media (max-width: 860px) {
+  .side { display: none; }
+  .main { margin-left: 0; padding: 20px 16px calc(var(--nav-h) + 32px + env(safe-area-inset-bottom)); }
+  .banner { margin-left: 0; padding: 8px 16px; }
+  .bottom-nav {
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    position: fixed; inset: auto 0 0 0; z-index: 20;
+    background: var(--surface); border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .bottom-nav a {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    height: var(--nav-h); color: var(--text-secondary); text-decoration: none; font-size: 11px;
+  }
+  .bottom-nav svg { width: 22px; height: 22px; }
+  .bottom-nav a.active { color: var(--primary-dark); font-weight: 500; }
+  .page-head { align-items: center; }
+  .page-head h1 { font-size: 20px; }
+}
+
+/* ── 登入畫面 ── */
+.login { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; }
+.login-card {
+  width: 100%; max-width: 380px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 36px 28px; text-align: center;
+}
+.login-card .brand-name { font-size: 28px; }
+.login-card p { color: var(--text-secondary); font-size: 14px; margin: 20px 0; }
+.login-fields { display: flex; flex-direction: column; gap: 14px; margin-top: 28px; text-align: left; }
+.login-fields .btn { min-height: 46px; font-size: 15px; margin-top: 4px; }
+.login-fields .login-error { margin-top: 0; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
+.check input { width: 16px; height: 16px; accent-color: var(--primary); margin: 0; }
+.login-error { color: #A4544C; background: var(--danger-soft); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; margin-top: 16px; text-align: left; }
+
+/* ── 未開放頁面／更多 ── */
+.placeholder { background: var(--surface); border: 1px dashed var(--border); border-radius: var(--radius); padding: 40px 24px; text-align: center; color: var(--text-secondary); }
+.placeholder strong { display: block; color: var(--text); font-size: 16px; margin-bottom: 6px; }
+.more-list { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.more-list a { display: flex; align-items: center; gap: 12px; padding: 14px 16px; text-decoration: none; color: var(--text); border-bottom: 1px solid var(--border); }
+.more-list a:last-child { border-bottom: 0; }
+.more-list svg { width: 20px; height: 20px; color: var(--text-secondary); }
+.more-list .soon { margin-left: auto; font-size: 12px; color: var(--text-secondary); }
+.more-user { margin-top: 20px; font-size: 13px; color: var(--text-secondary); }
