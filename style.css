@@ -517,3 +517,4 @@ details.adv .adv-body { padding: 14px 12px; display: flex; flex-direction: colum
   #print-root { display: block !important; }
   #print-root .label:last-child { break-after: auto; page-break-after: auto; }
 }
+
