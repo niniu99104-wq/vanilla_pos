@@ -29,7 +29,8 @@ const ICON_PATHS = {
   settings: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   more: '<circle cx="5.5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18.5" cy="12" r="1.4"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
-  refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>'
+  refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
+  labels: '<path d="M3.5 12.2V5a1.5 1.5 0 0 1 1.5-1.5h7.2l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.6 6.6a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.4"/>'
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
 
@@ -50,6 +51,7 @@ function toast(message, type = 'success', ms = 3600) {
   const open = document.querySelectorAll('dialog[open]');
   (open.length ? open[open.length - 1] : document.body).append(toastBox);
   toastBox.append(el);
+  while (toastBox.children.length > 3) toastBox.firstElementChild.remove();   // 最多同時顯示三則
   setTimeout(() => el.remove(), type === 'error' ? ms * 1.6 : ms);
 }
 
@@ -158,7 +160,7 @@ const { getSession, setSession, clearSession } = (() => {
 // 所有與後端的溝通都經過這裡：呼叫、逾時、錯誤處理、登入與帶上登入代碼。
 // 規則：只讀取的動作遇到暫時性錯誤會自動重試一次；寫入類動作絕不自動重送（逾時後由使用者確認）。
 const TIMEOUT_MS = 45000;
-const READ_ONLY = new Set(['init', 'boot', 'me', 'catalog', 'orders', 'order', 'production', 'labels', 'customers', 'customer', 'report', 'settings']);
+const READ_ONLY = new Set(['init', 'boot', 'me', 'labelRules', 'productLabels', 'catalog', 'orders', 'order', 'production', 'labels', 'customers', 'customer', 'report', 'settings']);
 const pause = ms => new Promise(r => setTimeout(r, ms));
 /** 最近一次請求花的時間（毫秒）：server＝後端實際處理；total＝從送出到收到回應。差額是 Google 的連線與啟動時間。 */
 const timing = { action: '', server: 0, total: 0 };
@@ -253,6 +255,11 @@ const api = {
   production: (date, basis) => call('production', { date, basis }),
   labels: orderIds => call('labels', { orderIds }),
   recordPrints: (items, status) => call('recordPrints', { items, status }),
+  // 商品小標籤
+  labelRules: () => call('labelRules'),
+  saveLabelRule: rule => call('saveLabelRule', rule),
+  deleteLabelRule: id => call('deleteLabelRule', { id }),
+  productLabels: (date, basis) => call('productLabels', { date, basis }),
   // 顧客
   customers: () => call('customers'),
   customer: id => call('customer', { id }),
@@ -272,7 +279,7 @@ const api = {
 const Store = {
   init: null,
   _cache: {},
-  _loaders: { catalog: () => api.catalog(), orders: () => api.orders(), customers: () => api.customers() },
+  _loaders: { catalog: () => api.catalog(), orders: () => api.orders(), customers: () => api.customers(), labelRules: () => api.labelRules() },
   FRESH_MS: 90000,
   load(key, force = false) {
     const hit = this._cache[key];
@@ -584,14 +591,15 @@ const mountProducts = (() => {
  * 透過瀏覽器的列印視窗列印（無法直接操作印表機）。紀錄分兩種：
  *   已送出列印＝已開啟列印視窗；列印成功＝列印後由使用者確認已正常出紙。
  */
-function labelHtml(l, brand) {
+function labelHtml(l) {
   const pickup = l.delivery === '工作室自取', cvs = l.delivery === '常溫超商店到店';
-  // 蛋糕：一張一顆，商品名稱＋規格。常溫：整筆一張，只有一種品項時用同樣的大字排版，多種品項時逐項列出。
-  const items = l.items || [{ product: l.product, variant: l.variant, quantity: 0, note: l.note }];
+  // 每筆訂單一張。只有一種品項：商品名稱大字、規格最大字，後面接 ×數量。多種品項：逐項列出（品名一行、規格×數量一行）。
+  const items = l.items || [];
   const main = items.length === 1
-    ? `<div class="lb-product fit">${esc(items[0].product)}</div><div class="lb-variant fit">${esc(items[0].variant)}${items[0].quantity ? `<small> ×${esc(items[0].quantity)}</small>` : ''}</div>`
+    ? `<div class="lb-product fit">${esc(items[0].product)}</div><div class="lb-variant fit">${esc(items[0].variant)}<small> ×${esc(items[0].quantity)}</small></div>`
     : `<div class="lb-items">${items.map(i => `<div class="lb-item"><div class="lb-item-name fit">${esc(i.product)}</div><div class="lb-item-var fit">${esc(i.variant)} <b>×${esc(i.quantity)}</b></div></div>`).join('')}</div>`;
-  const notes = [...new Set(items.map(i => (i.note || '').trim()).filter(Boolean).map(n => items.length > 1 ? n : n))];
+  // 商品備註：多品項時標明是哪一個品項的備註。
+  const notes = items.filter(i => (i.note || '').trim()).map(i => items.length > 1 ? `${i.product} ${i.variant}：${i.note.trim()}` : i.note.trim());
   const addons = (l.addons || []).map(a => `${esc(a.name)} ×${esc(a.quantity)}`).join('、');
   return `<div class="label">
     <div class="lb-clip"></div>
@@ -599,11 +607,11 @@ function labelHtml(l, brand) {
       <div class="lb-name fit">${esc(l.name)}</div>
       <div class="lb-phone">${esc(l.phone || '')}</div>
       ${main}
-      <div class="lb-cap">${pickup ? '取貨日' : '出貨日'}・${esc(l.delivery)}${l.of > 1 ? `・第 ${esc(l.unit)}／${esc(l.of)} 顆` : ''}</div>
+      <div class="lb-cap">${pickup ? '取貨日' : '出貨日'}・${esc(l.delivery)}</div>
       <div class="lb-date">${esc(fmtDay(l.date))}</div>
       ${l.time ? `<div class="lb-time">${esc(l.time)}</div>` : ''}
       ${addons ? `<div class="lb-addons"><span>加購</span>${addons}</div>` : ''}
-      ${notes.length || l.orderNote ? `<div class="lb-note">${notes.map(esc).join('／')}${notes.length && l.orderNote ? '<br>' : ''}${l.orderNote ? esc(l.orderNote) : ''}</div>` : ''}
+      ${notes.length || l.orderNote ? `<div class="lb-note">${notes.map(esc).join('<br>')}${notes.length && l.orderNote ? '<br>' : ''}${l.orderNote ? esc(l.orderNote) : ''}</div>` : ''}
       ${pickup ? '' : `<div class="lb-ship"><div><span>收件人</span>${esc(l.recipient || l.name)}　${esc(l.recipientPhone || l.phone || '')}</div><div><span>${cvs ? '門市' : '地址'}</span>${esc(l.address || '')}</div></div>`}
       <div class="lb-foot"><span>${esc(l.orderId)}</span><span>應收 ${money(l.total)}・已收 ${money(l.paid)}</span></div>
     </div>
@@ -615,16 +623,37 @@ function labelHtml(l, brand) {
  *  2. 標記為 .fit 的那一行（商品名稱、規格、姓名）不換行；太長時只縮小那一行的字，直到放得下。
  */
 function fitLabels(root) {
+  const fitLine = el => {
+    el.style.fontSize = '';
+    let size = parseFloat(getComputedStyle(el).fontSize); const min = size * 0.4;
+    while (el.scrollWidth > el.clientWidth + 1 && size > min) { size *= 0.96; el.style.fontSize = size + 'px'; }
+  };
   root.querySelectorAll('.label').forEach(label => {
     const body = label.querySelector('.lb-body'); if (!body) return;
     let k = 1; label.style.setProperty('--k', k);
     while (body.scrollHeight > body.clientHeight + 1 && k > 0.6) { k -= 0.04; label.style.setProperty('--k', k.toFixed(2)); }
-    label.querySelectorAll('.fit').forEach(el => {
-      el.style.fontSize = '';
-      let size = parseFloat(getComputedStyle(el).fontSize); const min = size * 0.4;
-      while (el.scrollWidth > el.clientWidth + 1 && size > min) { size *= 0.96; el.style.fontSize = size + 'px'; }
-    });
+    label.querySelectorAll('.fit').forEach(fitLine);
   });
+  // 商品小標籤：同樣文字的標籤字級相同，只量第一張，其餘直接套用。
+  const sizes = {};
+  root.querySelectorAll('.plabel .fit').forEach(el => {
+    const key = el.className + '|' + el.textContent;
+    if (key in sizes) { el.style.fontSize = sizes[key]; return; }
+    fitLine(el); sizes[key] = el.style.fontSize;
+  });
+}
+/** 把標籤內容放進列印區、設定紙張大小，然後開啟瀏覽器的列印視窗。 */
+function sendToPrinter(html, widthMm, heightMm) {
+  let root = document.getElementById('print-root');
+  if (!root) { root = document.createElement('div'); root.id = 'print-root'; document.body.append(root); }
+  const w = Number(widthMm), h = Number(heightMm);
+  root.style.setProperty('--lw', w + 'mm'); root.style.setProperty('--lh', h + 'mm');
+  root.innerHTML = html;
+  fitLabels(root);
+  let page = document.getElementById('print-page-size');
+  if (!page) { page = document.createElement('style'); page.id = 'print-page-size'; document.head.append(page); }
+  page.textContent = `@page { size: ${w}mm ${h}mm; margin: 0; }`;
+  window.print();                                    // 列印視窗關閉後才會往下執行（部分手機瀏覽器會立即往下）
 }
 
 async function printLabels(orderIds) {
@@ -643,23 +672,15 @@ async function printLabels(orderIds) {
     if (!data.labels.length) { body.innerHTML = emptyHtml('沒有標籤', '這些訂單沒有商品明細。'); }
     else {
       body.innerHTML = `<p class="muted small">共 ${data.labels.length} 張，尺寸 ${esc(data.width)} × ${esc(data.height)} mm。按「列印」後會開啟瀏覽器的列印視窗，請選擇標籤印表機，紙張選 ${esc(data.width)}×${esc(data.height)}mm、邊界選「無」。</p>
-        <div class="label-preview" style="--lw:${Number(data.width)}mm;--lh:${Number(data.height)}mm">${data.labels.map(l => labelHtml(l, data.brand)).join('')}</div>`;
+        <div class="label-preview" style="--lw:${Number(data.width)}mm;--lh:${Number(data.height)}mm">${data.labels.map(l => labelHtml(l)).join('')}</div>`;
       fitLabels(body);
       go.disabled = false; go.textContent = `列印 ${data.labels.length} 張`;
     }
   } catch (e) { body.innerHTML = emptyHtml('標籤讀取失敗', e.message); }
   go.addEventListener('click', async () => {
     if (!data) return;
-    let root = document.getElementById('print-root');
-    if (!root) { root = document.createElement('div'); root.id = 'print-root'; document.body.append(root); }
-    root.style.setProperty('--lw', Number(data.width) + 'mm'); root.style.setProperty('--lh', Number(data.height) + 'mm');
-    root.innerHTML = data.labels.map(l => labelHtml(l, data.brand)).join('');
-    fitLabels(root);
-    let page = document.getElementById('print-page-size');
-    if (!page) { page = document.createElement('style'); page.id = 'print-page-size'; document.head.append(page); }
-    page.textContent = `@page { size: ${Number(data.width)}mm ${Number(data.height)}mm; margin: 0; }`;
     go.disabled = true;
-    window.print();                                  // 列印視窗關閉後才會往下執行（部分手機瀏覽器會立即往下）
+    sendToPrinter(data.labels.map(l => labelHtml(l)).join(''), data.width, data.height);
     const items = data.labels.map(l => ({ orderId: l.orderId, detailId: l.detailId, unit: l.unit }));
     try { await api.recordPrints(items, '已送出列印'); printedAny = true; } catch (e) { toast('列印紀錄寫入失敗：' + e.message, 'error'); }
     go.disabled = false;
@@ -1398,6 +1419,154 @@ async function mountNewOrder(view, params) {
   if (!editId) $('#no-phone').focus();
 }
 
+/* ══════════ 七之二、商品小標籤 ══════════ */
+/* ══════ 商品小標籤 ══════
+ * 列印清單：這次要印哪些標籤、各幾張（可以手動加入，也可以依某一天的訂單帶入後再調整；要不要印由使用者決定）。
+ * 列印規則：某個商品（可指定規格）→ 標籤文字、每份張數。規則存在試算表的「標籤規則」分頁。
+ */
+const plState = { queue: [], madeDate: '', orderDate: '', basis: 'production', info: null };
+const plabelHtml = (text, dateText) => `<div class="plabel"><div class="pl-name fit">${esc(text)}</div><div class="pl-date fit">${esc(dateText)}</div></div>`;
+async function mountLabels(view, params, force) {
+  const st = plState, S = (Store.init && Store.init.settings) || {}, W = S.plabelW || 30, H = S.plabelH || 15, MAX = 600;
+  if (!st.madeDate) st.madeDate = todayStr(); if (!st.orderDate) st.orderDate = todayStr();
+  view.innerHTML = headHtml('商品標籤', `小標籤 ${esc(W)} × ${esc(H)} mm・印商品名稱與製造日期`) + `
+    <section class="card stack-form"><h2 class="card-title">列印清單</h2>
+      <div class="pl-tools">
+        <div class="field"><label for="pl-made">製造日期（印在標籤上）</label><input class="input" type="date" id="pl-made" value="${esc(st.madeDate)}"></div>
+        <div class="field grow"><span class="field-label">依訂單帶入張數</span>
+          <div class="pl-from"><input class="input" type="date" id="pl-odate" value="${esc(st.orderDate)}" aria-label="訂單日期">
+            <div class="seg">${[['production', '依製作日'], ['delivery', '依交付日']].map(([k, l]) => `<button type="button" data-plbasis="${k}" aria-pressed="${st.basis === k}">${l}</button>`).join('')}</div>
+            <button type="button" class="btn" data-act="pl-load">帶入</button></div>
+          <span class="hint">只會把張數算好放進清單，不會自動列印；帶入後可以再改張數或移除。</span></div>
+      </div>
+      <div id="pl-info"></div>
+      <div id="pl-queue"></div>
+      <div class="pl-foot"><b id="pl-total"></b><div class="btn-row"><button type="button" class="btn" data-act="pl-clear">清空</button><button type="button" class="btn btn-primary" data-act="pl-print">預覽並列印</button></div></div>
+    </section>
+    <section class="card stack-form"><div class="card-h"><h2 class="card-title" style="margin:0">列印規則</h2><button type="button" class="btn btn-sm btn-primary" data-act="pl-new">＋ 新增規則</button></div>
+      <p class="muted small">規則決定某個商品要印什麼字、每賣一份印幾張。同一個商品可以有多條規則；規格有專屬規則時，會優先用專屬的。</p>
+      <div class="table-wrap" id="pl-rules"></div>
+    </section>`;
+  const $ = s => view.querySelector(s), rulesBox = $('#pl-rules');
+  let rules = [], catalog = { products: [] };
+  const total = () => st.queue.reduce((n, q) => n + q.count, 0);
+  const add = (text, count) => { if (count < 1) return; const hit = st.queue.find(q => q.text === text); if (hit) hit.count = Math.min(hit.count + count, 999); else st.queue.push({ key: uuid(), text, count: Math.min(count, 999) }); };
+  function renderQueue() {
+    $('#pl-queue').innerHTML = st.queue.length ? st.queue.map(q => `<div class="pl-row" data-key="${q.key}"><div class="pl-text">${esc(q.text)}</div>
+      <div class="stepper"><button type="button" data-plstep="-1" aria-label="減少">−</button><input class="num" inputmode="numeric" maxlength="3" value="${q.count}" aria-label="${esc(q.text)} 張數"><button type="button" data-plstep="1" aria-label="增加">＋</button></div>
+      <span class="muted small">張</span><button type="button" class="icon-btn" data-plremove aria-label="移除 ${esc(q.text)}" title="移除">${icon('x')}</button></div>`).join('')
+      : `<p class="muted small empty-cart">清單是空的。從下方規則按「加入」，或用上面的「帶入」依訂單算出張數。</p>`;
+    $('#pl-total').textContent = `共 ${total()} 張`;
+  }
+  function renderInfo() {
+    const i = st.info; if (!i) { $('#pl-info').innerHTML = ''; return; }
+    $('#pl-info').innerHTML = `<div class="notice${i.unmatched.length ? ' warn' : ''}">已依 ${esc(fmtDay(i.date))}（${i.basis === 'production' ? '製作日' : '交付日'}）列入製作的 ${i.orders} 筆訂單帶入。${i.excluded ? `另有 ${i.excluded} 筆未列入製作（未付款或未確認），沒有計算。` : ''}
+      ${i.unmatched.length ? `<br>以下品項沒有對應的規則，沒有帶入：${i.unmatched.map(u => `${esc(u.product)} ${esc(u.variant)} ×${u.quantity}`).join('、')}` : ''}${!i.labels.length && !i.unmatched.length ? '<br>這一天沒有需要印標籤的品項。' : ''}</div>`;
+  }
+  function renderRules() {
+    if (!rules.length) { rulesBox.innerHTML = emptyHtml('還沒有規則', '按「＋ 新增規則」，從商品資料選一個商品開始。'); return; }
+    rulesBox.innerHTML = `<table class="table stack"><thead><tr><th><span>商品／規格</span></th><th><span>標籤文字</span></th><th class="r"><span>每份張數</span></th><th><span>加入列印清單</span></th><th></th></tr></thead><tbody>${rules.map(r => `<tr data-rule="${esc(r.id)}">
+      <td class="main"><span class="p-name">${esc(r.productName)}</span> <span class="muted small">${esc(r.variantName)}</span></td>
+      <td data-label="標籤文字">${esc(r.text)}</td><td data-label="每份張數" class="num r">${r.perUnit}</td>
+      <td data-label="加入"><span class="pl-add"><input class="input num" inputmode="numeric" maxlength="3" value="1" aria-label="份數"><span class="muted small">份</span><button type="button" class="btn btn-sm" data-act="pl-add">加入</button></span></td>
+      <td class="col-actions"><button type="button" class="btn btn-ghost btn-sm" data-act="pl-edit">編輯</button><button type="button" class="btn btn-ghost btn-sm danger-text" data-act="pl-del">刪除</button></td></tr>`).join('')}</tbody></table>`;
+  }
+  /** 新增／編輯規則的視窗：商品與規格從商品資料選。 */
+  function editRule(rule) {
+    return new Promise(resolve => {
+      const d = document.createElement('dialog'); d.className = 'confirm formdlg';
+      const prods = catalog.products.slice().sort((a, b) => a.category.localeCompare(b.category, 'zh-Hant') || a.sort - b.sort), cats = [...new Set(prods.map(p => p.category))];
+      d.innerHTML = `<form novalidate><h2>${rule ? '編輯規則' : '新增規則'}</h2><div class="fd-fields">
+        <div class="field"><label class="req" for="lr-prod">商品</label><select class="select" id="lr-prod"><option value="">請選擇商品</option>${cats.map(c => `<optgroup label="${esc(c)}">${prods.filter(p => p.category === c).map(p => `<option value="${esc(p.id)}"${rule && rule.productId === p.id ? ' selected' : ''}>${esc(p.name)}${p.status === '上架' ? '' : '（停售）'}</option>`).join('')}</optgroup>`).join('')}</select></div>
+        <div class="field"><label for="lr-var">規格</label><select class="select" id="lr-var"></select><span class="hint">選「全部規格」＝這個商品不分規格都用這條規則。</span></div>
+        <div class="field"><label class="req" for="lr-text">標籤文字</label><input class="input" id="lr-text" maxlength="30" value="${esc(rule ? rule.text : '')}"><span class="hint">印在標籤第一行，不換行；字數多會自動縮小。建議 8 個字以內。</span></div>
+        <div class="field"><label class="req" for="lr-per">每份張數</label><input class="input" id="lr-per" inputmode="numeric" maxlength="3" value="${esc(rule ? rule.perUnit : 1)}"><span class="hint">賣出一份要印幾張。例如 6 入禮盒每顆貼一張就填 6。</span></div>
+        </div><div class="form-error" role="alert" hidden></div>
+        <div class="actions"><button type="button" class="btn" data-v="0">取消</button><button type="submit" class="btn btn-primary">儲存規則</button></div></form>`;
+      const q = s => d.querySelector(s), err = q('.form-error'), ok = q('[type="submit"]');
+      let result = null, busy = false, autoText = !rule;
+      const fillVariants = keep => { const p = prods.find(x => x.id === q('#lr-prod').value); q('#lr-var').innerHTML = `<option value="">全部規格</option>` + (p ? p.variants.map(v => `<option value="${esc(v.id)}"${keep === v.id ? ' selected' : ''}>${esc(v.name)}${v.status === '上架' ? '' : '（停售）'}</option>`).join('') : ''); };
+      fillVariants(rule ? rule.variantId : '');
+      q('#lr-prod').addEventListener('change', () => { fillVariants(''); const p = prods.find(x => x.id === q('#lr-prod').value); if (autoText && p) q('#lr-text').value = p.name.slice(0, 30); });
+      q('#lr-text').addEventListener('input', () => { autoText = false; });
+      q('#lr-per').addEventListener('input', e => { e.target.value = e.target.value.replace(/[^\d]/g, ''); });
+      d.addEventListener('click', e => { if (e.target.closest('[data-v="0"]') && !busy) d.close(); });
+      d.addEventListener('cancel', e => { if (busy) e.preventDefault(); });
+      q('form').addEventListener('submit', async e => {
+        e.preventDefault(); if (busy) return;
+        const data = { id: rule ? rule.id : '', productId: q('#lr-prod').value, variantId: q('#lr-var').value, text: q('#lr-text').value.trim(), perUnit: Number(q('#lr-per').value), sort: rule ? rule.sort : 0 };
+        const fail = m => { err.textContent = m; err.hidden = false; };
+        if (!data.productId) return fail('請選擇商品。'); if (!data.text) return fail('請輸入標籤文字。'); if (!(data.perUnit >= 1 && data.perUnit <= 100)) return fail('每份張數請輸入 1–100。');
+        busy = true; ok.disabled = true; ok.textContent = '儲存中…'; err.hidden = true;
+        try { result = await api.saveLabelRule(data); d.close(); } catch (ex) { fail(ex.message); } finally { busy = false; ok.disabled = false; ok.textContent = '儲存規則'; }
+      });
+      d.addEventListener('close', () => { d.remove(); resolve(result); });
+      document.body.append(d); d.showModal();
+    });
+  }
+  async function preview() {
+    const n = total();
+    if (!n) return toast('列印清單是空的', 'info');
+    if (n > MAX) return toast(`一次最多列印 ${MAX} 張，目前 ${n} 張，請分批。`, 'error');
+    if (!st.madeDate) return toast('請先選擇製造日期', 'error');
+    const dateText = '製造日期 ' + st.madeDate.replace(/-/g, '.');
+    const d = document.createElement('dialog'); d.className = 'confirm print-dlg';
+    d.innerHTML = `<h2>列印商品標籤</h2><div class="print-body"><p class="muted small">共 ${n} 張，尺寸 ${esc(W)} × ${esc(H)} mm。請先把印表機換成小標籤紙捲；列印視窗裡紙張選 ${esc(W)}×${esc(H)}mm、邊界選「無」、縮放 100%。建議第一次先印 1–2 張確認位置。</p>
+      <div class="label-preview plabel-preview" style="--pw:${Number(W)}mm;--ph:${Number(H)}mm">${st.queue.filter(q => q.count > 0).map(q => `<div class="pl-sample">${plabelHtml(q.text, dateText)}<span class="muted small num">× ${q.count}</span></div>`).join('')}</div></div>
+      <div class="actions"><button type="button" class="btn" data-v="0">關閉</button><button type="button" class="btn btn-primary" data-v="1">列印 ${n} 張</button></div>`;
+    document.body.append(d); d.showModal(); fitLabels(d);
+    d.addEventListener('close', () => d.remove());
+    d.querySelector('[data-v="0"]').addEventListener('click', () => d.close());
+    d.querySelector('[data-v="1"]').addEventListener('click', () => {
+      let html = ''; st.queue.forEach(q => { for (let i = 0; i < q.count; i++) html += plabelHtml(q.text, dateText); });
+      sendToPrinter(html, W, H);                    // 列印區的寬高由 sendToPrinter 設定，小標籤直接沿用
+    });
+  }
+
+  view.addEventListener('click', onClick); view.addEventListener('input', onInput); view.addEventListener('change', onChange);
+  const off = () => { view.removeEventListener('click', onClick); view.removeEventListener('input', onInput); view.removeEventListener('change', onChange); };
+  function onInput(e) {
+    if (!view.contains(rulesBox)) return off();
+    const t = e.target; if (t.inputMode === 'numeric') t.value = t.value.replace(/[^\d]/g, '');
+    const row = t.closest('.pl-row'); if (row) { const q = st.queue.find(x => x.key === row.dataset.key); q.count = Math.min(Number(t.value) || 0, 999); $('#pl-total').textContent = `共 ${total()} 張`; }
+  }
+  function onChange(e) {
+    if (!view.contains(rulesBox)) return off();
+    if (e.target.id === 'pl-made') st.madeDate = e.target.value;
+    if (e.target.id === 'pl-odate') st.orderDate = e.target.value;
+  }
+  async function onClick(e) {
+    if (!view.contains(rulesBox)) return off();
+    const t = e.target, step = t.closest('[data-plstep]'), basis = t.closest('[data-plbasis]'), act = t.closest('[data-act]');
+    if (step) { const q = st.queue.find(x => x.key === step.closest('.pl-row').dataset.key); q.count = Math.max(0, Math.min(999, q.count + Number(step.dataset.plstep))); renderQueue(); return; }
+    if (t.closest('[data-plremove]')) { const k = t.closest('.pl-row').dataset.key; st.queue = st.queue.filter(x => x.key !== k); renderQueue(); return; }
+    if (basis) { st.basis = basis.dataset.plbasis; view.querySelectorAll('[data-plbasis]').forEach(x => x.setAttribute('aria-pressed', x === basis)); return; }
+    if (!act) return; const a = act.dataset.act, tr = t.closest('[data-rule]'), rule = tr && rules.find(r => r.id === tr.dataset.rule);
+    if (a === 'reload') { off(); mountLabels(view, params, true); }
+    else if (a === 'pl-clear') { st.queue = []; st.info = null; renderQueue(); renderInfo(); }
+    else if (a === 'pl-print') preview();
+    else if (a === 'pl-add' && rule) { const n = Number(tr.querySelector('.pl-add input').value) || 0; if (n < 1) return toast('請輸入份數', 'info'); add(rule.text, n * rule.perUnit); renderQueue(); toast(`已加入：${rule.text} ${n * rule.perUnit} 張`, 'info', 1600); }
+    else if (a === 'pl-new' || (a === 'pl-edit' && rule)) { const r = await editRule(a === 'pl-edit' ? rule : null); if (r) { rules = r; Store.set('labelRules', r); renderRules(); toast('規則已儲存'); } }
+    else if (a === 'pl-del' && rule) {
+      if (!await confirmDialog({ title: '刪除這條規則？', message: `${rule.productName}（${rule.variantName}）→ ${rule.text}`, okText: '刪除', danger: true })) return;
+      act.disabled = true; try { rules = await api.deleteLabelRule(rule.id); Store.set('labelRules', rules); renderRules(); toast('規則已刪除'); } catch (ex) { toast(ex.message, 'error'); act.disabled = false; }
+    }
+    else if (a === 'pl-load') {
+      if (!st.orderDate) return toast('請先選擇訂單日期', 'info');
+      if (st.queue.length && !await confirmDialog({ title: '用訂單的張數取代目前的清單？', message: '目前清單裡的內容會被清掉。', okText: '取代' })) return;
+      act.disabled = true; act.textContent = '計算中…';
+      try { const r = await api.productLabels(st.orderDate, st.basis); st.queue = r.labels.map(l => ({ key: uuid(), text: l.text, count: Math.min(l.count, 999) })); st.info = r; renderQueue(); renderInfo(); }
+      catch (ex) { toast(ex.message, 'error'); }
+      act.disabled = false; act.textContent = '帶入';
+    }
+  }
+  renderQueue(); renderInfo();
+  rulesBox.innerHTML = loadingHtml('讀取規則中…');
+  try { [rules, catalog] = await Promise.all([Store.load('labelRules', force), Store.load('catalog')]); renderRules(); }
+  catch (e) { rulesBox.innerHTML = errorHtml('規則讀取失敗', e.message); }
+  return off;
+}
+
 /* ══════════ 八、主程式 ══════════ */
 /* ══════ 主程式：登入畫面、導覽外框、頁面切換 ══════ */
 const PAGES = [
@@ -1408,6 +1577,7 @@ const PAGES = [
   { id: 'production', label: '製作', mount: mountProduction, live: true },
   { id: 'customers', label: '顧客', mount: mountCustomers, live: true },
   { id: 'products', label: '商品', mount: mountProducts, live: true },
+  { id: 'labels', label: '商品標籤', mount: mountLabels },
   { id: 'reports', label: '報表', mount: mountReports },
   { id: 'settings', label: '設定', mount: mountSettings }
 ];
