@@ -256,9 +256,9 @@ dialog::backdrop { background: rgba(48,59,64,.35); }
 .chip:hover { border-color: var(--primary); background: var(--primary-soft); }
 .chip[disabled] { color: #B5BCBE; background: var(--background); border-color: var(--border); cursor: default; }
 .variants { display: flex; flex-direction: column; gap: 8px; }
-.variant { display: grid; grid-template-columns: minmax(0,1.3fr) 104px 118px minmax(0,1fr) 76px; gap: 8px; align-items: center; padding: 10px; background: var(--background); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.variant { display: grid; grid-template-columns: minmax(0,1.2fr) 96px 96px 112px minmax(0,1fr) 76px; gap: 8px; align-items: center; padding: 10px; background: var(--background); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .variant.is-off { opacity: .7; }
-.variant-head { display: grid; grid-template-columns: minmax(0,1.3fr) 104px 118px minmax(0,1fr) 76px; gap: 8px; padding: 0 11px; font-size: 12px; color: var(--text-secondary); }
+.variant-head { display: grid; grid-template-columns: minmax(0,1.2fr) 96px 96px 112px minmax(0,1fr) 76px; gap: 8px; padding: 0 11px; font-size: 12px; color: var(--text-secondary); }
 .variant .v-act { display: flex; justify-content: flex-end; }
 .price-wrap { position: relative; }
 .price-wrap::before { content: "$"; position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-secondary); font-size: 14px; }
@@ -291,9 +291,8 @@ details.adv .adv-body { padding: 14px 12px; display: flex; flex-direction: colum
   .drawer-foot .btn { flex: 1; }
   .grid-2 { grid-template-columns: 1fr; }
   .variant-head { display: none; }
-  .variant { grid-template-columns: minmax(0,1fr) 112px; }
-  .variant .v-note { grid-column: 1 / -1; }
-  .variant .v-act { grid-column: 2; grid-row: 2; }
+  .variant { grid-template-columns: minmax(0,1fr) 104px; grid-template-areas: "name price" "rule cost" "note act"; }
+  .variant .v-name { grid-area: name; } .variant .vp { grid-area: price; } .variant .vc { grid-area: cost; } .variant .v-rule { grid-area: rule; } .variant .v-note { grid-area: note; } .variant .v-act { grid-area: act; }
 }
 
 /* ══════════ 七、各頁面 ══════════ */
@@ -331,6 +330,11 @@ details.adv .adv-body { padding: 14px 12px; display: flex; flex-direction: colum
 .quote-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 #no-quote-box .notice { margin: 8px 0 0; }
 #f-chips:empty { display: none; }
+.cat-sum { margin: 12px 0; }
+.cat-sum .chip-ro b { font-weight: 500; margin-left: 4px; }
+.lgdlg { width: min(520px, calc(100vw - 32px)); }
+.lgdlg .actions { flex-wrap: wrap; }
+.notice b { font-weight: 700; }
 .tile-value { font-size: 24px; font-weight: 700; line-height: 1.3; margin-top: 2px; word-break: break-all; }
 .tile-value.small-v { font-size: 16px; padding: 6px 0; }
 .tile-sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
@@ -353,6 +357,7 @@ details.adv .adv-body { padding: 14px 12px; display: flex; flex-direction: colum
 .mini-row > span:last-child { flex: none; }
 .stack-form { display: flex; flex-direction: column; gap: 14px; }
 .notice { border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; margin: 10px 0; }
+.notice { background: var(--primary-soft); color: var(--text); }
 .notice.warn { background: var(--warning-soft); color: #7A6233; border: 1px solid #EADFC6; }
 .table-wrap.pad { padding: 14px 16px; }
 .table tr.clickable { cursor: pointer; }
