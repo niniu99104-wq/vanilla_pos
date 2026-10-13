@@ -30,6 +30,7 @@ const ICON_PATHS = {
   more: '<circle cx="5.5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18.5" cy="12" r="1.4"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
+  ledger: '<rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="M8 8h8M8 12h8M8 16h4"/><path d="M15.5 15.5l1.5 1.5 2.5-3"/>',
   labels: '<path d="M3.5 12.2V5a1.5 1.5 0 0 1 1.5-1.5h7.2l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.6 6.6a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.4"/>'
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
@@ -160,7 +161,7 @@ const { getSession, setSession, clearSession } = (() => {
 // 所有與後端的溝通都經過這裡：呼叫、逾時、錯誤處理、登入與帶上登入代碼。
 // 規則：只讀取的動作遇到暫時性錯誤會自動重試一次；寫入類動作絕不自動重送（逾時後由使用者確認）。
 const TIMEOUT_MS = 45000;
-const READ_ONLY = new Set(['init', 'boot', 'me', 'labelRules', 'productLabels', 'deliveryQuote', 'catalog', 'orders', 'order', 'production', 'labels', 'customers', 'customer', 'report', 'settings']);
+const READ_ONLY = new Set(['init', 'boot', 'me', 'labelRules', 'productLabels', 'deliveryQuote', 'ledger', 'monthlyReport', 'catalog', 'orders', 'order', 'production', 'labels', 'customers', 'customer', 'report', 'settings']);
 const pause = ms => new Promise(r => setTimeout(r, ms));
 /** 最近一次請求花的時間（毫秒）：server＝後端實際處理；total＝從送出到收到回應。差額是 Google 的連線與啟動時間。 */
 const timing = { action: '', server: 0, total: 0 };
@@ -219,7 +220,8 @@ async function callOnce(action, args) {
 /* 商品資料：後端為中文欄位，轉成前端用的英文欄位 */
 const toVariant = v => ({
   id: String(v['規格編號'] ?? ''), name: String(v['規格名稱'] ?? ''), price: Number(v['售價']) || 0,
-  shippingRule: String(v['宅配規則'] ?? ''), status: String(v['上架狀態'] ?? ''), note: String(v['備註'] ?? ''), sort: Number(v['排序']) || 0
+  shippingRule: String(v['宅配規則'] ?? ''), status: String(v['上架狀態'] ?? ''), note: String(v['備註'] ?? ''), sort: Number(v['排序']) || 0,
+  cost: v['預估成本'] === '' || v['預估成本'] == null ? '' : Number(v['預估成本'])
 });
 const toProduct = p => ({
   id: String(p['商品編號'] ?? ''), category: String(p['分類'] ?? ''), name: String(p['商品名稱'] ?? ''),
@@ -267,6 +269,10 @@ const api = {
   saveCustomer: customer => call('saveCustomer', customer),
   // 報表與設定
   report: (from, to) => call('report', { from, to }),
+  monthlyReport: month => call('monthlyReport', { month }),
+  ledger: month => call('ledger', { month }),
+  saveLedger: entry => call('saveLedger', entry),
+  deleteLedger: id => call('deleteLedger', { id }),
   settings: () => call('settings'),
   saveSettings: values => call('saveSettings', { values })
 };
@@ -439,7 +445,8 @@ const mountProducts = (() => {
     const saved = !!v.id, on = v.status !== '停售';
     return `<div class="variant${on ? '' : ' is-off'}" data-vid="${esc(v.id || '')}">
       <input class="input v-name" placeholder="規格名稱" aria-label="規格名稱" maxlength="40" value="${esc(v.name || '')}">
-      <div class="price-wrap"><input class="input v-price" inputmode="numeric" placeholder="售價" aria-label="售價" maxlength="7" value="${v.price === '' || v.price == null ? '' : esc(v.price)}"></div>
+      <div class="price-wrap vp"><input class="input v-price" inputmode="numeric" placeholder="售價" aria-label="售價" maxlength="7" value="${v.price === '' || v.price == null ? '' : esc(v.price)}"></div>
+      <div class="price-wrap vc"><input class="input v-cost" inputmode="numeric" placeholder="成本" aria-label="預估成本（選填）" title="預估成本：原料＋包材，選填。用來計算毛利。" maxlength="7" value="${v.cost === '' || v.cost == null ? '' : esc(v.cost)}"></div>
       <select class="select v-rule" aria-label="宅配規則">${state.shippingRules.map(r => `<option${r === (v.shippingRule || DEFAULT_RULE[temp]) ? ' selected' : ''}>${esc(r)}</option>`).join('')}</select>
       <input class="input v-note" placeholder="規格備註（選填）" aria-label="規格備註" maxlength="200" value="${esc(v.note || '')}">
       <div class="v-act">${saved
@@ -473,7 +480,7 @@ const mountProducts = (() => {
         <div class="section-title">規格與售價 <small>至少一個；由上到下就是顯示順序</small></div>
         <div class="chips" id="f-chips" aria-label="快速加入常用規格"></div>
         <div>
-          <div class="variant-head"><span>規格名稱</span><span>售價</span><span>宅配規則</span><span>備註</span><span></span></div>
+          <div class="variant-head"><span>規格名稱</span><span>售價</span><span>預估成本</span><span>宅配規則</span><span>備註</span><span></span></div>
           <div class="variants" id="f-variants">${variants.map(v => variantRow(v, temp)).join('')}</div>
         </div>
         <div><button type="button" class="btn btn-sm" data-act="add-variant">＋ 新增規格</button></div>
@@ -514,7 +521,7 @@ const mountProducts = (() => {
         mode: isEdit ? 'update' : 'create', id: $('#f-id').value.trim(), name: $('#f-name').value.trim(), category: $('#f-cat').value.trim(),
         temp: curTemp(), status: $('#f-status').getAttribute('aria-checked') === 'true' ? '上架' : '停售', note: $('#f-note').value.trim(), sort: $('#f-sort').value.trim() || '0',
         variants: [...list.querySelectorAll('.variant')].map(r => ({
-          id: r.dataset.vid || '', name: r.querySelector('.v-name').value.trim(), price: r.querySelector('.v-price').value.trim(), shippingRule: r.querySelector('.v-rule').value, note: r.querySelector('.v-note').value.trim(),
+          id: r.dataset.vid || '', name: r.querySelector('.v-name').value.trim(), price: r.querySelector('.v-price').value.trim(), cost: r.querySelector('.v-cost').value.trim(), shippingRule: r.querySelector('.v-rule').value, note: r.querySelector('.v-note').value.trim(),
           status: r.querySelector('.v-status') ? (r.querySelector('.v-status').getAttribute('aria-checked') === 'true' ? '上架' : '停售') : '上架'
         }))
       };
@@ -534,6 +541,7 @@ const mountProducts = (() => {
         if (seen.has(v.name)) return bad(rows[i].querySelector('.v-name'), `規格名稱「${v.name}」重複了。`);
         seen.add(v.name);
         if (!/^\d{1,7}$/.test(v.price)) return bad(rows[i].querySelector('.v-price'), `請輸入「${v.name}」的售價（整數）。`);
+        if (v.cost !== '' && !/^\d{1,7}$/.test(v.cost)) return bad(rows[i].querySelector('.v-cost'), `「${v.name}」的預估成本請輸入整數，或留空。`);
       }
       return null;
     }
@@ -557,7 +565,7 @@ const mountProducts = (() => {
     d.addEventListener('change', e => { if (e.target.name === 'f-temp') renderChips(); });
     d.addEventListener('input', e => {
       const t = e.target;
-      if (t.classList.contains('v-price') || t.id === 'f-sort') t.value = t.value.replace(/[^\d]/g, '');
+      if (t.classList.contains('v-price') || t.classList.contains('v-cost') || t.id === 'f-sort') t.value = t.value.replace(/[^\d]/g, '');
       if (t.classList.contains('v-name')) renderChips();
       t.classList.remove('invalid'); if (!errBox.hidden) showError('');
     });
@@ -573,7 +581,7 @@ const mountProducts = (() => {
       e.preventDefault(); if (saving) return;
       const data = collect(), err = validate(data);
       if (err) { showError(err.msg); err.el.focus(); return; }
-      const payload = { ...data, sort: Number(data.sort), variants: data.variants.map(v => ({ ...v, price: Number(v.price) })) };
+      const payload = { ...data, sort: Number(data.sort), variants: data.variants.map(v => ({ ...v, price: Number(v.price), cost: v.cost === '' ? '' : Number(v.cost) })) };
       const btn = $('#f-save'); saving = true; btn.disabled = true; btn.textContent = '儲存中…'; showError('');
       try {
         const saved = await api.saveProduct(payload);
@@ -1072,7 +1080,7 @@ async function openCustomer(id) {
 
 /* ══════ 營業報表 ══════ */
 const repState = { from: '', to: '', preset: 'month' };
-async function mountReports(view) {
+async function mountSalesReport(view) {
   const st = repState, today = todayStr();
   const preset = k => {
     const first = today.slice(0, 8) + '01';
@@ -1082,7 +1090,7 @@ async function mountReports(view) {
     return [st.from, st.to];
   };
   if (!st.from) [st.from, st.to] = preset('month');
-  view.innerHTML = headHtml('營業報表') + `
+  view.innerHTML = `
     <div class="toolbar">
       <div class="seg">${[['month', '本月'], ['last', '上個月'], ['30', '近 30 天']].map(([k, l]) => `<button type="button" data-rp="${k}" aria-pressed="${st.preset === k}">${l}</button>`).join('')}</div>
       <label class="range"><input class="input" type="date" id="r-from" value="${esc(st.from)}" aria-label="起始日"> – <input class="input" type="date" id="r-to" value="${esc(st.to)}" aria-label="結束日"></label>
@@ -1126,6 +1134,55 @@ async function mountReports(view) {
   }
   await load();
   return off;
+}
+
+/* ══════ 報表：營運月報／銷售報表 ══════ */
+const rptState = { tab: 'monthly', month: '' };
+async function mountReports(view) {
+  view.innerHTML = headHtml('報表') + `<div class="seg tabs" id="rp-tabs">${[['monthly', '營運月報'], ['sales', '銷售報表']].map(([k, l]) => `<button type="button" data-rptab="${k}" aria-pressed="${rptState.tab === k}">${l}</button>`).join('')}</div><div id="rp-body"></div>`;
+  const body = view.querySelector('#rp-body'); let inner = null;
+  const show = async () => { if (typeof inner === 'function') inner(); inner = await (rptState.tab === 'sales' ? mountSalesReport(body) : mountMonthlyReport(body)); };
+  const onClick = e => { if (!view.contains(body)) return view.removeEventListener('click', onClick); const t = e.target.closest('[data-rptab]'); if (!t) return; rptState.tab = t.dataset.rptab; view.querySelectorAll('[data-rptab]').forEach(x => x.setAttribute('aria-pressed', x === t)); show(); };
+  view.addEventListener('click', onClick);
+  await show();
+  return () => { view.removeEventListener('click', onClick); if (typeof inner === 'function') inner(); };
+}
+const monthTitle = m => `${Number(m.slice(0, 4))} 年 ${Number(m.slice(5, 7))} 月`;
+const shiftMonth = (m, d) => new Date(Date.UTC(Number(m.slice(0, 4)), Number(m.slice(5, 7)) - 1 + d, 1, 12)).toISOString().slice(0, 7);
+async function mountMonthlyReport(view) {
+  const st = rptState; if (!st.month) st.month = todayStr().slice(0, 7);
+  view.innerHTML = `<div class="toolbar"><div class="cal-nav" style="margin-left:0"><button type="button" class="btn btn-sm" data-mnav="-1" aria-label="上個月">‹</button><button type="button" class="btn btn-sm" data-mnav="0">本月</button><button type="button" class="btn btn-sm" data-mnav="1" aria-label="下個月">›</button><b id="mr-title" class="num"></b></div></div><div id="mr-body"></div>`;
+  const box = view.querySelector('#mr-body'); let seq = 0;
+  async function load() {
+    view.querySelector('#mr-title').textContent = monthTitle(st.month);
+    const mine = ++seq; box.innerHTML = loadingHtml('計算月報中…');
+    try { const d = await api.monthlyReport(st.month); if (mine === seq) render(d); } catch (e) { if (mine === seq) box.innerHTML = errorHtml('月報讀取失敗', e.message); }
+  }
+  function render(d) {
+    const c = d.cash, r = d.reference;
+    const tile = (label, value, sub = '', cls = '') => `<div class="tile ${cls}"><div class="tile-label">${esc(label)}</div><div class="tile-value num">${value}</div>${sub ? `<div class="tile-sub">${esc(sub)}</div>` : ''}</div>`;
+    const signed = n => (n < 0 ? '−' : '') + money(Math.abs(n));
+    const listTable = (rows, total, first) => rows.length ? `<div class="table-wrap"><table class="table stack"><thead><tr><th><span>${first}</span></th><th class="r"><span>金額</span></th><th class="r"><span>占比</span></th></tr></thead><tbody>${rows.map(x => `<tr><td class="main">${esc(x.name)}</td><td data-label="金額" class="num r">${money(x.amount)}</td><td data-label="占比" class="num r">${total ? Math.round(x.amount / total * 100) : 0}%</td></tr>`).join('')}</tbody></table></div>` : `<div class="table-wrap">${emptyHtml('沒有紀錄')}</div>`;
+    box.innerHTML = `
+      <div class="notice">月報分兩部分，避免重複計算：<b>一、現金收支</b>依實際收付日期，進貨已算在支出裡；<b>二、經營參考</b>依交付日，估算成本只用來看各商品賺多少，不會再從結餘扣一次。</div>
+      <h2 class="sec-h">一、現金收支（${esc(fmtDay(d.from))}–${esc(fmtDay(d.to))}）</h2>
+      <div class="tiles">${tile('訂單收款', money(c.received))}${tile('退款', (c.refunded ? '−' : '') + money(c.refunded))}${tile('其他收入', money(c.otherIncome))}
+        ${tile('支出（含進貨）', '−' + money(c.expense))}${tile('本月結餘', signed(c.balance), '收款 − 退款 ＋ 其他收入 − 支出', c.balance < 0 ? 'warn strong' : 'strong')}</div>
+      <div class="cards-2 plain"><div><h2 class="sec-h">支出分類</h2>${listTable(c.expenseByCategory, c.expense, '分類')}</div>
+        <div><h2 class="sec-h">其他收入分類</h2>${listTable(c.incomeByCategory, c.otherIncome, '分類')}${c.expenseByBatch.length ? `<h2 class="sec-h">依用途批次的支出</h2>${listTable(c.expenseByBatch, c.expense, '用途批次')}` : ''}</div></div>
+      <h2 class="sec-h">二、經營參考（依交付日，不含已取消）</h2>
+      <div class="tiles">${tile('交付訂單', r.orderCount + ' 筆', '訂單金額 ' + money(r.orderTotal))}${tile('商品銷售額', money(r.productSales))}${tile('估算商品成本', money(r.estimatedCost))}
+        ${tile('估算毛利', money(r.grossMargin), r.grossMarginRate == null ? '' : '毛利率 ' + r.grossMarginRate + '%', 'strong')}${tile('成本資料涵蓋', r.coverage == null ? '—' : r.coverage + '%', '有填預估成本的銷售額占比')}</div>
+      ${r.missingCost.length ? `<div class="notice warn">以下規格還沒有填預估成本，沒有算進毛利：${r.missingCost.map(esc).join('、')}。請到「商品」頁編輯，在規格的「預估成本」欄填入。</div>` : ''}
+      <h2 class="sec-h">商品毛利排行</h2>
+      <div class="table-wrap">${d.products.length ? `<table class="table stack"><thead><tr><th><span>商品／規格</span></th><th class="r"><span>數量</span></th><th class="r"><span>銷售額</span></th><th class="r"><span>估算成本</span></th><th class="r"><span>毛利</span></th><th class="r"><span>毛利率</span></th></tr></thead><tbody>${d.products.map(p => `<tr><td class="main">${esc(p.name)} <span class="muted">${esc(p.variant)}</span></td><td data-label="數量" class="num r">${p.quantity}</td><td data-label="銷售額" class="num r">${money(p.sales)}</td><td data-label="估算成本" class="num r">${p.costKnown ? money(p.cost) : '<span class="muted">未填</span>'}</td><td data-label="毛利" class="num r">${p.margin == null ? '—' : money(p.margin)}</td><td data-label="毛利率" class="num r">${p.marginRate == null ? '—' : p.marginRate + '%'}</td></tr>`).join('')}</tbody></table>` : emptyHtml('這個月沒有交付的訂單')}</div>
+      <h2 class="sec-h">近六個月現金結餘</h2>
+      <div class="table-wrap"><table class="table stack"><thead><tr><th><span>月份</span></th><th class="r"><span>訂單收款（扣退款）</span></th><th class="r"><span>其他收入</span></th><th class="r"><span>支出</span></th><th class="r"><span>結餘</span></th></tr></thead><tbody>${d.trend.map(x => `<tr${x.month === d.month ? ' class="sel"' : ''}><td class="main num">${esc(monthTitle(x.month))}</td><td data-label="訂單收款" class="num r">${money(x.received - x.refunded)}</td><td data-label="其他收入" class="num r">${money(x.otherIncome)}</td><td data-label="支出" class="num r">${x.expense ? '−' + money(x.expense) : money(0)}</td><td data-label="結餘" class="num r"><b>${signed(x.balance)}</b></td></tr>`).join('')}</tbody></table></div>`;
+  }
+  const onClick = e => { if (!view.contains(box)) return view.removeEventListener('click', onClick); const n = e.target.closest('[data-mnav]'); if (n) { const d = Number(n.dataset.mnav); st.month = d ? shiftMonth(st.month, d) : todayStr().slice(0, 7); load(); } else if (e.target.closest('[data-act="reload"]')) load(); };
+  view.addEventListener('click', onClick);
+  await load();
+  return () => view.removeEventListener('click', onClick);
 }
 
 /* ══════ 系統設定 ══════ */
@@ -1631,6 +1688,102 @@ async function mountLabels(view, params, force) {
   return off;
 }
 
+/* ══════════ 七之三、收支紀錄 ══════════ */
+/* ══════ 收支紀錄 ══════
+ * 記訂單以外的支出（進貨、房租、水電…）與其他收入（現場銷售、課程…）。訂單收款會自動進月報，這裡不必記。
+ */
+const ledgerState = { month: '', type: '', lastDate: '' };
+async function mountLedger(view) {
+  const st = ledgerState; if (!st.month) st.month = todayStr().slice(0, 7);
+  view.innerHTML = headHtml('收支紀錄', '訂單收款會自動計入營運月報，這裡只記訂單以外的支出與收入。', `<button type="button" class="btn" data-act="lg-add" data-type="收入">＋ 記收入</button><button type="button" class="btn btn-primary" data-act="lg-add" data-type="支出">＋ 記支出</button>`) + `
+    <div class="toolbar"><div class="cal-nav" style="margin-left:0"><button type="button" class="btn btn-sm" data-lgnav="-1" aria-label="上個月">‹</button><button type="button" class="btn btn-sm" data-lgnav="0">本月</button><button type="button" class="btn btn-sm" data-lgnav="1" aria-label="下個月">›</button><b id="lg-title" class="num"></b></div>
+      <div class="seg">${[['', '全部'], ['支出', '支出'], ['收入', '收入']].map(([k, l]) => `<button type="button" data-lgtype="${k}" aria-pressed="${st.type === k}">${l}</button>`).join('')}</div></div>
+    <div id="lg-body"></div>`;
+  const box = view.querySelector('#lg-body'); let data = null, seq = 0;
+  async function load() {
+    view.querySelector('#lg-title').textContent = monthTitle(st.month);
+    const mine = ++seq; box.innerHTML = loadingHtml('讀取收支中…');
+    try { const d = await api.ledger(st.month); if (mine === seq) { data = d; render(); } } catch (e) { if (mine === seq) box.innerHTML = errorHtml('收支讀取失敗', e.message); }
+  }
+  function render() {
+    const list = data.entries.filter(x => !st.type || x.type === st.type), exp = data.entries.filter(x => x.type === '支出'), inc = data.entries.filter(x => x.type === '收入');
+    const sum = l => l.reduce((n, x) => n + x.amount, 0), byCat = {}; exp.forEach(x => { byCat[x.category] = (byCat[x.category] || 0) + x.amount; });
+    box.innerHTML = `
+      <div class="tiles tiles-3"><div class="tile"><div class="tile-label">本月支出</div><div class="tile-value num">${money(sum(exp))}</div><div class="tile-sub">${exp.length} 筆</div></div>
+        <div class="tile"><div class="tile-label">本月其他收入</div><div class="tile-value num">${money(sum(inc))}</div><div class="tile-sub">${inc.length} 筆</div></div>
+        <div class="tile"><div class="tile-label">看完整月報</div><div class="tile-value small-v"><a href="#/reports">報表 → 營運月報</a></div></div></div>
+      ${Object.keys(byCat).length ? `<div class="chips ro cat-sum">${Object.keys(byCat).sort((a, b) => byCat[b] - byCat[a]).map(k => `<span class="chip-ro">${esc(k)} <b class="num">${money(byCat[k])}</b></span>`).join('')}</div>` : ''}
+      <div class="table-wrap">${list.length ? `<table class="table stack"><thead><tr><th><span>日期／分類</span></th><th class="r"><span>金額</span></th><th><span>供應商</span></th><th><span>發票／單據號</span></th><th><span>用途批次</span></th><th><span>備註</span></th><th></th></tr></thead><tbody>${list.map(x => `<tr data-lg="${esc(x.id)}">
+        <td class="main"><span class="num">${esc(fmtDay(x.date))}</span> ${x.type === '收入' ? '<span class="tag t-ok">收入</span>' : ''} ${esc(x.category)}</td>
+        <td data-label="金額" class="num r"><b>${x.type === '支出' ? '−' : '＋'}${money(x.amount)}</b></td>
+        <td data-label="供應商">${esc(x.supplier || '—')}</td><td data-label="發票／單據號" class="num">${esc(x.invoice || '—')}</td><td data-label="用途批次">${esc(x.batch || '—')}</td><td data-label="備註">${esc(x.note || '')}</td>
+        <td class="col-actions"><button type="button" class="btn btn-ghost btn-sm" data-act="lg-edit">編輯</button><button type="button" class="btn btn-ghost btn-sm danger-text" data-act="lg-del">刪除</button></td></tr>`).join('')}</tbody></table>`
+        : emptyHtml(`${monthTitle(st.month)}還沒有${st.type ? st.type : '收支'}紀錄`, '按右上角「＋ 記支出」或「＋ 記收入」新增。')}</div>`;
+  }
+  /** 新增／修改一筆收支。新增時可按「儲存並再記一筆」連續輸入。 */
+  function editEntry(entry, type) {
+    return new Promise(resolve => {
+      const isEdit = !!entry, cats = (data && data.categories) || { expense: [], income: [] };
+      let t = isEdit ? entry.type : type, result = null, busy = false;
+      const d = document.createElement('dialog'); d.className = 'confirm formdlg lgdlg';
+      const catOptions = (tt, cur) => { const l = (tt === '收入' ? cats.income : cats.expense).slice(); if (cur && !l.includes(cur)) l.push(cur); return l.map(c => `<option${c === cur ? ' selected' : ''}>${esc(c)}</option>`).join(''); };
+      d.innerHTML = `<form novalidate><h2>${isEdit ? '修改紀錄' : '記一筆'}</h2>
+        <div class="seg block" style="margin-top:12px">${['支出', '收入'].map(x => `<label><input type="radio" name="lg-type" value="${x}"${x === t ? ' checked' : ''}><span>${x}</span></label>`).join('')}</div>
+        <div class="fd-fields">
+          <div class="grid-2"><div class="field"><label class="req" for="lg-date">日期</label><input class="input" type="date" id="lg-date" value="${esc(isEdit ? entry.date : (st.lastDate || todayStr()))}"></div>
+            <div class="field"><label class="req" for="lg-amount">金額</label><div class="price-wrap"><input class="input" id="lg-amount" inputmode="numeric" maxlength="8" value="${isEdit ? esc(entry.amount) : ''}"></div></div></div>
+          <div class="field"><label class="req" for="lg-cat">分類</label><select class="select" id="lg-cat">${catOptions(t, isEdit ? entry.category : '')}</select><span class="hint">分類可以在「設定」頁增減。</span></div>
+          <div class="field"><label for="lg-sup">供應商</label><input class="input" id="lg-sup" maxlength="60" list="lg-sups" value="${esc(isEdit ? entry.supplier : '')}"><datalist id="lg-sups">${((data && data.suppliers) || []).map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
+          <div class="grid-2"><div class="field"><label for="lg-inv">發票／單據號</label><input class="input" id="lg-inv" maxlength="40" autocapitalize="characters" value="${esc(isEdit ? entry.invoice : '')}" placeholder="選填"></div>
+            <div class="field"><label for="lg-batch">用途批次</label><input class="input" id="lg-batch" maxlength="60" list="lg-batches" value="${esc(isEdit ? entry.batch : '')}" placeholder="例如：10月茶會"><datalist id="lg-batches">${((data && data.batches) || []).map(x => `<option value="${esc(x)}">`).join('')}</datalist></div></div>
+          <div class="field"><label for="lg-note">備註</label><input class="input" id="lg-note" maxlength="500" value="${esc(isEdit ? entry.note : '')}" placeholder="選填"></div>
+        </div><div class="form-error" role="alert" hidden></div>
+        <div class="actions"><button type="button" class="btn" data-v="0">取消</button>${isEdit ? '' : '<button type="button" class="btn" data-v="again">儲存並再記一筆</button>'}<button type="submit" class="btn btn-primary">儲存</button></div></form>`;
+      const q = s => d.querySelector(s), err = q('.form-error');
+      const fail = m => { err.textContent = m; err.hidden = false; };
+      d.addEventListener('change', e => { if (e.target.name === 'lg-type') { t = e.target.value; q('#lg-cat').innerHTML = catOptions(t, ''); } });
+      q('#lg-amount').addEventListener('input', e => { e.target.value = e.target.value.replace(/[^\d]/g, ''); });
+      d.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches('input')) e.preventDefault(); });
+      d.addEventListener('cancel', e => { if (busy) e.preventDefault(); });
+      async function save(again) {
+        if (busy) return;
+        const v = { id: isEdit ? entry.id : '', type: t, date: q('#lg-date').value, amount: q('#lg-amount').value, category: q('#lg-cat').value, supplier: q('#lg-sup').value.trim(), invoice: q('#lg-inv').value.trim(), batch: q('#lg-batch').value.trim(), note: q('#lg-note').value.trim() };
+        if (!v.date) return fail('請選擇日期。'); if (!(Number(v.amount) > 0)) return fail('請輸入金額。'); if (!v.category) return fail('請選擇分類。');
+        busy = true; d.querySelectorAll('.actions button').forEach(b => { b.disabled = true; }); err.hidden = true;
+        try {
+          result = await api.saveLedger({ ...v, amount: Number(v.amount) }); st.lastDate = v.date;
+          if (again) { toast(`已記：${v.category} ${money(v.amount)}`); onSaved(result); ['#lg-amount', '#lg-inv', '#lg-note'].forEach(s => { q(s).value = ''; }); q('#lg-amount').focus(); }
+          else d.close();
+        } catch (ex) { fail(ex.message); }
+        finally { busy = false; d.querySelectorAll('.actions button').forEach(b => { b.disabled = false; }); }
+      }
+      q('form').addEventListener('submit', e => { e.preventDefault(); save(false); });
+      d.addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (!b || busy) return; if (b.dataset.v === '0') d.close(); if (b.dataset.v === 'again') save(true); });
+      d.addEventListener('close', () => { d.remove(); resolve(result); });
+      document.body.append(d); d.showModal(); if (!isEdit) q('#lg-amount').focus();
+    });
+  }
+  function onSaved(r) { if (r.month === st.month) { data = r; render(); } else toast(`已記在 ${monthTitle(r.month)}`, 'info'); }
+  const onClick = async e => {
+    if (!view.contains(box)) return view.removeEventListener('click', onClick);
+    const t = e.target, nav = t.closest('[data-lgnav]'), ty = t.closest('[data-lgtype]'), act = t.closest('[data-act]');
+    if (nav) { const d = Number(nav.dataset.lgnav); st.month = d ? shiftMonth(st.month, d) : todayStr().slice(0, 7); load(); return; }
+    if (ty) { st.type = ty.dataset.lgtype; view.querySelectorAll('[data-lgtype]').forEach(x => x.setAttribute('aria-pressed', x === ty)); if (data) render(); return; }
+    if (!act) return;
+    const row = t.closest('[data-lg]'), entry = row && data && data.entries.find(x => x.id === row.dataset.lg);
+    if (act.dataset.act === 'reload') load();
+    else if (act.dataset.act === 'lg-add') { if (!data) return; const r = await editEntry(null, act.dataset.type); if (r) { onSaved(r); toast('已儲存'); } }
+    else if (act.dataset.act === 'lg-edit' && entry) { const r = await editEntry(entry); if (r) { onSaved(r); toast('已修改'); } }
+    else if (act.dataset.act === 'lg-del' && entry) {
+      if (!await confirmDialog({ title: '刪除這筆紀錄？', message: `${fmtDay(entry.date)}・${entry.type}・${entry.category}・${money(entry.amount)}${entry.supplier ? '・' + entry.supplier : ''}`, okText: '刪除', danger: true })) return;
+      act.disabled = true; try { onSaved(await api.deleteLedger(entry.id)); toast('已刪除'); } catch (ex) { toast(ex.message, 'error'); act.disabled = false; }
+    }
+  };
+  view.addEventListener('click', onClick);
+  await load();
+  return () => view.removeEventListener('click', onClick);
+}
+
 /* ══════════ 八、主程式 ══════════ */
 /* ══════ 主程式：登入畫面、導覽外框、頁面切換 ══════ */
 const PAGES = [
@@ -1642,6 +1795,7 @@ const PAGES = [
   { id: 'customers', label: '顧客', mount: mountCustomers, live: true },
   { id: 'products', label: '商品', mount: mountProducts, live: true },
   { id: 'labels', label: '商品標籤', mount: mountLabels },
+  { id: 'ledger', label: '收支', mount: mountLedger },
   { id: 'reports', label: '報表', mount: mountReports },
   { id: 'settings', label: '設定', mount: mountSettings }
 ];
