@@ -35,7 +35,7 @@ const ICON_PATHS = {
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
 
 /* 狀態標籤 */
-const TAG_CLASS = { '待確認': 't-warn', '已確認': 't-info', '製作中': 't-sage', '待取貨': 't-sage', '已出貨': 't-sage', '已完成': 't-done', '已取消': 't-off', '未付款': 't-danger', '部分付款': 't-warn', '已付款': 't-ok', '已退款': 't-off', '冷凍': 'tag-frozen', '常溫': 'tag-ambient' };
+const TAG_CLASS = { '待確認': 't-warn', '已確認': 't-info', '製作中': 't-sage', '待取貨': 't-sage', '已出貨': 't-sage', '已完成': 't-done', '已取消': 't-off', '未付款': 't-danger', '部分付款': 't-warn', '已付款': 't-ok', '已退款': 't-off', '冷凍': 'tag-frozen', '冷藏': 'tag-chill', '常溫': 'tag-ambient', '混合': 't-off', '茶會': 't-tea' };
 const tag = s => s ? `<span class="tag ${TAG_CLASS[s] || 't-off'}">${esc(s)}</span>` : '';
 const loadingHtml = (text = '讀取中…') => `<div class="state"><div class="spinner"></div>${esc(text)}</div>`;
 const errorHtml = (title, message) => `<div class="state"><strong>${esc(title)}</strong>${esc(message)}<br><button type="button" class="btn" data-act="reload">重新整理</button></div>`;
@@ -160,7 +160,7 @@ const { getSession, setSession, clearSession } = (() => {
 // 所有與後端的溝通都經過這裡：呼叫、逾時、錯誤處理、登入與帶上登入代碼。
 // 規則：只讀取的動作遇到暫時性錯誤會自動重試一次；寫入類動作絕不自動重送（逾時後由使用者確認）。
 const TIMEOUT_MS = 45000;
-const READ_ONLY = new Set(['init', 'boot', 'me', 'labelRules', 'productLabels', 'catalog', 'orders', 'order', 'production', 'labels', 'customers', 'customer', 'report', 'settings']);
+const READ_ONLY = new Set(['init', 'boot', 'me', 'labelRules', 'productLabels', 'deliveryQuote', 'catalog', 'orders', 'order', 'production', 'labels', 'customers', 'customer', 'report', 'settings']);
 const pause = ms => new Promise(r => setTimeout(r, ms));
 /** 最近一次請求花的時間（毫秒）：server＝後端實際處理；total＝從送出到收到回應。差額是 Google 的連線與啟動時間。 */
 const timing = { action: '', server: 0, total: 0 };
@@ -224,7 +224,7 @@ const toVariant = v => ({
 const toProduct = p => ({
   id: String(p['商品編號'] ?? ''), category: String(p['分類'] ?? ''), name: String(p['商品名稱'] ?? ''),
   status: String(p['上架狀態'] ?? ''), note: String(p['商品備註'] ?? ''), sort: Number(p['排序']) || 0,
-  updatedAt: String(p['更新時間'] ?? ''), temp: p['溫層'] === '常溫' ? '常溫' : '冷凍',
+  updatedAt: String(p['更新時間'] ?? ''), temp: ['冷凍', '冷藏', '常溫'].includes(p['溫層']) ? p['溫層'] : '冷凍',
   variants: (p.variants || []).map(toVariant)
 });
 
@@ -253,6 +253,7 @@ const api = {
   recordPayment: payload => call('recordPayment', payload),
   // 製作與標籤
   production: (date, basis) => call('production', { date, basis }),
+  deliveryQuote: (address, goods) => call('deliveryQuote', { address, goods }),
   labels: orderIds => call('labels', { orderIds }),
   recordPrints: (items, status) => call('recordPrints', { items, status }),
   // 商品小標籤
@@ -312,13 +313,15 @@ const Store = {
 const mountProducts = (() => {
   // 商品管理：商品列表（搜尋／篩選／排序／上架開關）＋ 新增・編輯抽屜（商品與全部規格一次儲存）
 
-  const PRESETS = { '冷凍': ['4吋', '5吋', '6吋', '8吋'], '常溫': ['單顆', '6入盒', '10入禮盒', '150g／罐'] };
-  const TEMP_LABEL = { '冷凍': '冷凍蛋糕', '常溫': '常溫點心' };
+  const PRESETS = { '冷凍': ['4吋', '5吋', '6吋', '8吋'], '冷藏': [], '常溫': ['單顆', '6入盒', '10入禮盒', '150g／罐'] };
+  const TEMPS = ['冷凍', '冷藏', '常溫'];
+  const TEMP_LABEL = { '冷凍': '冷凍', '冷藏': '冷藏', '常溫': '常溫' };
   const TEMP_HINT = {
-    '冷凍': '可選「工作室自取、冷凍宅配」；宅配運費每顆計算；每顆一張標籤。',
-    '常溫': '可選「工作室自取、超商店到店、新竹物流」；運費整筆計算；整筆訂單一張標籤。'
+    '冷凍': '可選「工作室自取、外送、冷凍宅配」；冷凍宅配運費每顆計算。',
+    '冷藏': '可選「工作室自取、外送」；不能物流寄送。',
+    '常溫': '可選「工作室自取、外送、超商店到店、新竹物流」；超商與新竹物流運費整筆計算。'
   };
-  const DEFAULT_RULE = { '冷凍': '限自取', '常溫': '可宅配' };
+  const DEFAULT_RULE = { '冷凍': '限自取', '冷藏': '限自取', '常溫': '可宅配' };
 
   let root, state;
 
@@ -394,7 +397,7 @@ const mountProducts = (() => {
         const specs = p.variants.map(v => v.status === '上架' ? esc(v.name) : `<s>${esc(v.name)}</s>`).join('、');
         return `<tr data-id="${esc(p.id)}" class="${on ? '' : 'is-off'}${state.flashId === p.id ? ' flash' : ''}">
           <td class="c-name"><div class="p-name">${esc(p.name)}</div>
-            <div class="p-meta"><span class="num">${esc(p.id)}</span><span class="tag ${p.temp === '常溫' ? 'tag-ambient' : 'tag-frozen'}">${esc(p.temp)}</span></div></td>
+            <div class="p-meta"><span class="num">${esc(p.id)}</span>${tag(p.temp)}</div></td>
           <td class="c-cat">${esc(p.category)}</td>
           <td class="c-specs"><span class="p-specs">${p.variants.length} 個：${specs || '—'}</span></td>
           <td class="c-price num p-price">${esc(pr.text)}</td>
@@ -448,7 +451,7 @@ const mountProducts = (() => {
   function openEditor(product, asCopy = false) {
     const isEdit = !!product && !asCopy;
     const src = product || { name: '', category: state.category || '', temp: '冷凍', status: '上架', note: '', sort: 0, variants: [] };
-    const temp = src.temp === '常溫' ? '常溫' : '冷凍';
+    const temp = TEMPS.includes(src.temp) ? src.temp : '冷凍';
     const variants = (product ? src.variants : []).map(v => asCopy ? { ...v, id: '', status: '上架' } : v);
     const d = document.createElement('dialog');
     d.className = 'drawer';
@@ -463,7 +466,7 @@ const mountProducts = (() => {
             <input class="input" id="f-cat" maxlength="40" list="f-cats" autocomplete="off" placeholder="選擇或輸入新分類" value="${esc(src.category)}">
             <datalist id="f-cats">${categories().map(c => `<option value="${esc(c)}">`).join('')}</datalist></div>
           <div class="field"><span class="field-label req">類型</span>
-            <div class="seg block" role="radiogroup" aria-label="類型">${['冷凍', '常溫'].map(t => `<label><input type="radio" name="f-temp" value="${t}"${t === temp ? ' checked' : ''}><span>${TEMP_LABEL[t]}</span></label>`).join('')}</div></div>
+            <div class="seg block" role="radiogroup" aria-label="類型">${TEMPS.map(t => `<label><input type="radio" name="f-temp" value="${t}"${t === temp ? ' checked' : ''}><span>${TEMP_LABEL[t]}</span></label>`).join('')}</div></div>
         </div>
         <p class="hint small muted" id="f-temp-hint"></p>
 
@@ -604,10 +607,11 @@ function labelHtml(l) {
   return `<div class="label">
     <div class="lb-clip"></div>
     <div class="lb-body">
+      ${l.tea ? '<div class="lb-tea">茶會</div>' : ''}
       <div class="lb-name fit">${esc(l.name)}</div>
       <div class="lb-phone">${esc(l.phone || '')}</div>
       ${main}
-      <div class="lb-cap">${pickup ? '取貨日' : '出貨日'}・${esc(l.delivery)}</div>
+      <div class="lb-cap">${pickup ? '取貨日' : l.delivery === '外送' ? '送達日' : '出貨日'}・${esc(l.delivery)}</div>
       <div class="lb-date">${esc(fmtDay(l.date))}</div>
       ${l.time ? `<div class="lb-time">${esc(l.time)}</div>` : ''}
       ${addons ? `<div class="lb-addons"><span>加購</span>${addons}</div>` : ''}
@@ -711,7 +715,7 @@ async function openOrder(id) {
     title.textContent = '訂單 ' + shortId(o.id);
     const row = (k, v) => v ? `<div class="kv"><span>${esc(k)}</span><b>${v}</b></div>` : '';
     body.innerHTML = `
-      <div class="od-top"><div class="od-tags">${tag(o.status)}${tag(o.payStatus)}${tag(o.temp)}</div>
+      <div class="od-top"><div class="od-tags">${o.tea ? tag('茶會') : ''}${tag(o.status)}${tag(o.payStatus)}${tag(o.temp)}</div>
         <div class="muted small num">${esc(o.id)}・建立 ${esc(o.createdAt)}${o.createdBy ? '・' + esc(o.createdBy) : ''}</div></div>
       <div class="od-actions">
         ${cancelled ? '' : `<button type="button" class="btn btn-sm" data-act="status">修改狀態</button>
@@ -723,7 +727,7 @@ async function openOrder(id) {
       </div>
       ${cancelled && o.paid > 0 ? `<div class="notice warn">這筆訂單已取消，但仍有已收款 ${money(o.paid)} 尚未退款。</div>` : ''}
       <section class="od-sec"><h3>顧客</h3>${row('姓名', esc(o.name))}${row('電話', `<a href="tel:${esc(o.phone)}">${esc(o.phone)}</a>`)}</section>
-      <section class="od-sec"><h3>交付</h3>${row('方式', esc(o.delivery))}${row(pickup ? '取貨時間' : '出貨日期', esc(fmtDay(o.date)) + (o.time ? ' ' + esc(o.time) : ''))}
+      <section class="od-sec"><h3>交付</h3>${row('方式', esc(o.delivery))}${row(pickup ? '取貨時間' : o.delivery === '外送' ? '送達時間' : '出貨日期', esc(fmtDay(o.date)) + (o.time ? ' ' + esc(o.time) : ''))}${o.delivery === '外送' && o.deliveryKm != null ? row('外送距離', `約 ${esc(o.deliveryKm)} 公里`) : ''}
         ${row('製作日期', o.productionDate ? esc(fmtDay(o.productionDate)) : '')}
         ${pickup ? '' : row('收件人', esc(o.recipient)) + row('收件電話', esc(o.recipientPhone)) + row(o.delivery === '常溫超商店到店' ? '門市' : '地址', esc(o.address))}</section>
       <section class="od-sec"><h3>商品</h3>
@@ -777,7 +781,7 @@ function orderRowsHtml(orders) {
   return orders.map(o => {
     const unpaid = Math.max(o.total - o.paid, 0);
     return `<tr data-order="${esc(o.id)}" class="clickable${o.status === '已取消' ? ' is-off' : ''}" tabindex="0">
-      <td class="main"><span class="p-name">${esc(o.name)}</span> <span class="muted small num">${esc(shortId(o.id))}</span></td>
+      <td class="main">${o.tea ? tag('茶會') + ' ' : ''}<span class="p-name">${esc(o.name)}</span> <span class="muted small num">${esc(shortId(o.id))}</span></td>
       <td data-label="商品">${esc(o.summary || '—')}</td>
       <td data-label="交付"><span class="num">${esc(fmtDay(o.date))}${o.time ? ' ' + esc(o.time) : ''}</span><span class="muted small"> ${esc(o.delivery)}</span></td>
       <td data-label="付款">${tag(o.payStatus)}${unpaid && o.status !== '已取消' ? ` <span class="small num muted">未收 ${money(unpaid)}</span>` : ''}</td>
@@ -1134,7 +1138,7 @@ async function mountSettings(view) {
     const chips = list => `<div class="chips ro">${list.map(x => `<span class="chip-ro">${esc(x)}</span>`).join('') || '<span class="muted small">（無）</span>'}</div>`;
     box.innerHTML = `
       <form class="card stack-form" id="s-form" novalidate><h2 class="card-title">營運設定</h2>
-        <div class="grid-2">${d.items.map(i => `<div class="field"><label for="s-${esc(i.key)}">${esc(i.label)}</label><input class="input" id="s-${esc(i.key)}" data-key="${esc(i.key)}" ${i.type === 'time' ? 'type="time"' : ['money', 'mm', 'hours'].includes(i.type) ? 'inputmode="numeric"' : ''} maxlength="200" value="${esc(i.value)}"></div>`).join('')}</div>
+        <div class="grid-2">${d.items.map(i => `<div class="field"><label for="s-${esc(i.key)}">${esc(i.label)}</label><input class="input" id="s-${esc(i.key)}" data-key="${esc(i.key)}" ${i.type === 'time' ? 'type="time"' : ['money', 'mm', 'hours', 'km'].includes(i.type) ? 'inputmode="numeric"' : ''}${i.type === 'tiers' ? ' placeholder="例如 5:150,10:250,15:400"' : ''} maxlength="200" value="${esc(i.value)}"></div>`).join('')}</div>
         <div class="form-error" id="s-err" role="alert" hidden></div>
         <div><button type="submit" class="btn btn-primary" id="s-save">儲存設定</button></div>
       </form>
@@ -1186,7 +1190,8 @@ async function mountSettings(view) {
 let newOrderDirty = () => false;
 async function mountNewOrder(view, params) {
   const editId = params.edit || '', init = Store.init || {}, S = init.settings || {};
-  const st = { requestId: uuid(), delivery: '工作室自取', cat: '', cart: [], addons: [], locked: false, saving: false, original: null, touched: false, done: false };
+  const st = { requestId: uuid(), delivery: '工作室自取', tea: false, quote: null, quoteSeq: 0, cat: '', cart: [], addons: [], locked: false, saving: false, original: null, touched: false, done: false };
+  const MIX = init.mixDeliveries || ['工作室自取', '外送'], DR = S.delivery || { tiers: [], maxKm: 30, warnKm: 25, minKm: 10, minAmount: 0 };
   newOrderDirty = () => !st.done && view.contains(view.querySelector('#no-form')) && (st.touched || st.cart.length > 0);
   view.innerHTML = headHtml(editId ? '修改訂單' : '新增訂單', editId ? `<span class="num">${esc(editId)}</span>` : '') + `<div id="no-wrap">${loadingHtml('準備中…')}</div>`;
   const wrap = view.querySelector('#no-wrap');
@@ -1210,7 +1215,9 @@ async function mountNewOrder(view, params) {
   if (o) {
     if (o.status === '已取消') { wrap.innerHTML = emptyHtml('這筆訂單已取消，不能修改'); return; }
     st.locked = !['待確認', '已確認'].includes(o.status);
-    st.delivery = o.delivery;
+    st.delivery = o.delivery; st.tea = !!o.tea;
+    // 外送：原本的距離與運費視為已計算好的結果；地址改了才需要重新計算。
+    if (o.delivery === '外送') st.quote = { address: o.address, km: o.deliveryKm, minutes: null, fee: o.shipping, found: true, tooFar: false };
     const tempOf = id => { const p = catalog.products.find(x => x.id === id); return p ? p.temp : o.temp; };
     st.cart = st.original.items.map(i => ({ key: uuid(), detailId: i.id, variantId: i.variantId, name: i.name, variant: i.variant, price: i.price, quantity: i.quantity, note: i.note, rule: i.shippingRule, temp: tempOf(i.productId), approved: true }));
     st.addons = st.original.addons.map(a => ({ key: uuid(), name: a.name, quantity: a.quantity, price: a.price }));
@@ -1228,13 +1235,15 @@ async function mountNewOrder(view, params) {
           ${editId ? '' : `<div class="field"><label for="no-cnote">顧客備註</label><input class="input" id="no-cnote" maxlength="500" placeholder="會記在顧客資料上，選填"></div>`}
         </section>
         <section class="card"><h2 class="card-title">交付</h2>
+          <div class="tea-row"><button type="button" class="switch" role="switch" id="no-tea" aria-checked="${st.tea}"${st.locked ? ' disabled' : ''}><i></i><span>茶會訂單</span></button><span class="hint">茶會只能自取或外送，溫層可以混；列表與製作標籤會標示「茶會」。</span></div>
           <div class="field"><span class="field-label req">交付方式</span><div class="seg wrap" id="no-deliv" role="radiogroup" aria-label="交付方式"></div><span class="hint" id="no-deliv-hint"></span></div>
           <div class="grid-2"><div class="field"><label class="req" for="no-date" id="no-date-label">取貨日期</label><input class="input" type="date" id="no-date" value="${esc(val('date'))}"></div>
-            <div class="field" id="no-time-field"><label class="req" for="no-time">取貨時間</label><input class="input" type="time" id="no-time" value="${esc(val('time', S.pickupStart || ''))}"><span class="hint">${S.pickupStart && S.pickupEnd ? `預設取貨時段 ${esc(S.pickupStart)}–${esc(S.pickupEnd)}` : ''}</span></div></div>
+            <div class="field" id="no-time-field"><label class="req" for="no-time" id="no-time-label">取貨時間</label><input class="input" type="time" id="no-time" value="${esc(val('time', S.pickupStart || ''))}"><span class="hint">${S.pickupStart && S.pickupEnd ? `預設取貨時段 ${esc(S.pickupStart)}–${esc(S.pickupEnd)}` : ''}</span></div></div>
           <div id="no-ship" hidden>
             <div class="grid-2"><div class="field"><label for="no-rec">收件人</label><input class="input" id="no-rec" maxlength="60" placeholder="留空＝同顧客姓名" value="${esc(val('recipient'))}"></div>
               <div class="field"><label for="no-recphone">收件電話</label><input class="input" id="no-recphone" inputmode="tel" maxlength="30" placeholder="留空＝同聯絡電話" value="${esc(val('recipientPhone'))}"></div></div>
             <div class="field"><label class="req" for="no-addr" id="no-addr-label">收件地址</label><input class="input" id="no-addr" maxlength="500" value="${esc(val('address'))}"></div>
+            <div id="no-quote-box" hidden><div class="quote-row"><button type="button" class="btn btn-sm" data-act="quote"${st.locked ? ' disabled' : ''}>計算外送運費</button><span id="no-quote" class="small"></span></div><div id="no-quote-warn"></div></div>
           </div>
           <div class="field"><label for="no-prod">製作日期（選填）</label><input class="input" type="date" id="no-prod" value="${esc(val('productionDate'))}"><span class="hint">沒填就當作和交付日同一天。</span></div>
           <div class="field"><label for="no-note">訂單備註</label><textarea class="textarea" id="no-note" maxlength="2000" placeholder="選填">${esc(val('note'))}</textarea></div>
@@ -1262,34 +1271,74 @@ async function mountNewOrder(view, params) {
   </form>`;
 
   const $ = s => wrap.querySelector(s), form = $('#no-form');
-  const cartTemp = () => st.cart.length ? st.cart[0].temp : '';
-  const pickup = () => st.delivery === '工作室自取';
+  const temps = () => [...new Set(st.cart.map(i => i.temp))];
+  const pickup = () => st.delivery === '工作室自取', local = () => st.delivery === '外送';
+  const addrNow = () => ($('#no-addr') ? $('#no-addr').value.trim() : '');
+  const quoteOk = () => !!(st.quote && st.quote.found && !st.quote.tooFar && st.quote.fee != null && st.quote.address === addrNow());
+  /** 可選的交付方式：茶會＝自取／外送；多種溫層＝自取／外送；單一溫層＝該溫層可用的方式。 */
+  const allowedDeliveries = () => { const all = init.deliveries || ['工作室自取'], ts = temps(); if (st.tea || ts.length > 1) return MIX.slice(); if (ts.length === 1) return (init.deliveryByTemp || {})[ts[0]] || all; return all; };
   const num = el => { const v = el ? el.value.trim() : ''; return v === '' ? null : Number(v); };
 
   function calc() {
     const subtotal = st.cart.reduce((n, i) => n + i.price * i.quantity, 0), addonTotal = st.addons.reduce((n, a) => n + (Number(a.price) || 0) * (Number(a.quantity) || 0), 0);
     if (st.locked) return { subtotal: o.subtotal, addonTotal: o.addonTotal, shipping: o.shipping, discount: o.discount, total: o.total, auto: o.shipping };
     const qty = st.cart.reduce((n, i) => n + i.quantity, 0);
-    const auto = pickup() ? 0 : st.delivery === '冷凍宅配' ? qty * (S.feePerCake || 0) : st.delivery === '常溫超商店到店' ? (S.feeCvs || 0) : (S.feeHct || 0);
-    const manual = num($('#no-shipfee')), shipping = pickup() ? 0 : (manual == null ? auto : manual), discount = num($('#no-discount')) || 0;
-    return { subtotal, addonTotal, shipping, discount, total: subtotal + addonTotal + shipping - discount, auto };
+    const auto = pickup() ? 0 : local() ? (quoteOk() ? st.quote.fee : null) : st.delivery === '冷凍宅配' ? qty * (S.feePerCake || 0) : st.delivery === '常溫超商店到店' ? (S.feeCvs || 0) : (S.feeHct || 0);
+    const manual = num($('#no-shipfee')), shipping = pickup() ? 0 : (manual == null ? (auto || 0) : manual), discount = num($('#no-discount')) || 0;
+    return { subtotal, addonTotal, shipping, discount, total: subtotal + addonTotal + shipping - discount, auto, pending: local() && manual == null && auto == null };
   }
   function renderDelivery() {
-    const all = init.deliveries || ['工作室自取'], allowed = cartTemp() ? (init.deliveryByTemp || {})[cartTemp()] || all : all;
+    const all = init.deliveries || ['工作室自取'], allowed = allowedDeliveries(), ts = temps();
     if (!allowed.includes(st.delivery)) st.delivery = '工作室自取';
     $('#no-deliv').innerHTML = all.map(d => `<button type="button" data-deliv="${esc(d)}" aria-pressed="${d === st.delivery}"${allowed.includes(d) && !st.locked ? '' : ' disabled'}>${esc(d)}</button>`).join('');
-    $('#no-deliv-hint').textContent = st.locked ? '' : cartTemp() ? `訂單內是${cartTemp()}商品，只能選對應的交付方式。` : '加入商品後，會依冷凍或常溫限制可選的方式。';
-    const p = pickup(); $('#no-ship').hidden = p; $('#no-time-field').hidden = !p;
-    $('#no-date-label').textContent = p ? '取貨日期' : '出貨日期';
-    $('#no-addr-label').textContent = st.delivery === '常溫超商店到店' ? '門市名稱（例如：7-11 大智門市）' : '收件地址';
+    $('#no-deliv-hint').textContent = st.locked ? '' : st.tea ? '茶會只能選工作室自取或外送。'
+      : ts.length > 1 ? `訂單內有${ts.join('、')}商品，只能自取或外送。`
+      : ts.length === 1 ? `訂單內是${ts[0]}商品。自取與外送可以混溫層；物流寄送只能同一種溫層。`
+      : '自取與外送可以混溫層；冷凍宅配、超商、新竹物流只能同一種溫層。';
+    const p = pickup(), l = local();
+    $('#no-ship').hidden = p; $('#no-time-field').hidden = !(p || l); $('#no-quote-box').hidden = !l;
+    $('#no-date-label').textContent = p ? '取貨日期' : l ? '送達日期' : '出貨日期';
+    $('#no-time-label').textContent = l ? '送達時間' : '取貨時間';
+    $('#no-addr-label').textContent = st.delivery === '常溫超商店到店' ? '門市名稱（例如：7-11 大智門市）' : l ? '送達地址（越完整越準）' : '收件地址';
+    renderQuote();
+  }
+  /** 外送距離與運費的顯示；低消與距離提醒依目前金額即時更新。 */
+  function deliveryWarnings() {
+    if (!local() || !st.quote || !st.quote.found || st.quote.km == null || st.quote.address !== addrNow()) return [];
+    const km = st.quote.km, c = calc(), goods = c.subtotal + c.addonTotal, w = [];
+    if (km > DR.maxKm) w.push(`距離 ${km} 公里，超過 ${DR.maxKm} 公里不外送`);
+    else if (km > DR.warnKm) w.push(`距離 ${km} 公里，超過 ${DR.warnKm} 公里`);
+    if (km >= DR.minKm && DR.minAmount > 0 && goods < DR.minAmount) w.push(`${DR.minKm} 公里以上低消 ${money(DR.minAmount)}，目前商品金額 ${money(goods)}`);
+    return w;
+  }
+  function renderQuote() {
+    if (!$('#no-quote')) return;
+    const q = st.quote, el = $('#no-quote');
+    if (!local()) { el.textContent = ''; $('#no-quote-warn').innerHTML = ''; return; }
+    if (st.quoting) el.innerHTML = '<span class="muted">計算中…</span>';
+    else if (!q) el.innerHTML = '<span class="muted">輸入地址後按「計算外送運費」</span>';
+    else if (q.address !== addrNow()) el.innerHTML = '<span class="muted">地址已修改，請重新計算</span>';
+    else if (!q.found) el.innerHTML = `<span class="danger-text">${esc(q.error || '找不到這個地址')}</span>`;
+    else if (q.tooFar) el.innerHTML = `<span class="danger-text">約 ${esc(q.km)} 公里，超過 ${esc(DR.maxKm)} 公里不外送</span>`;
+    else el.innerHTML = `${q.km != null ? `約 <b class="num">${esc(q.km)}</b> 公里` : '距離未知'}${q.minutes ? `（開車約 ${esc(q.minutes)} 分）` : ''}・運費 <b class="num">${money(q.fee)}</b>`;
+    const w = deliveryWarnings();
+    $('#no-quote-warn').innerHTML = w.length ? `<div class="notice warn">${w.map(esc).join('<br>')}</div>` : '';
+  }
+  async function getQuote() {
+    const address = addrNow(); if (!local() || !address) { if (local()) toast('請先輸入送達地址', 'info'); return; }
+    const mine = ++st.quoteSeq, c = calc(); st.quoting = true; renderQuote();
+    try { const r = await api.deliveryQuote(address, c.subtotal + c.addonTotal); if (mine !== st.quoteSeq) return; st.quote = { ...r, address }; }
+    catch (ex) { if (mine !== st.quoteSeq) return; st.quote = { found: false, address, error: ex.message }; }
+    st.quoting = false; renderQuote(); renderTotals();
   }
   function renderPicker() {
     if (st.locked) return;
     $('#no-cats').innerHTML = cats.map(c => `<button type="button" class="chip${c === st.cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('') || '<span class="muted small">還沒有上架的商品，請先到「商品」頁新增。</span>';
-    const temp = cartTemp();
+    // 只有選了物流寄送（冷凍宅配、超商、新竹）時，才會擋住不同溫層的商品。
+    const byTemp = init.deliveryByTemp || {};
     $('#no-prods').innerHTML = products.filter(p => p.category === st.cat).map(p => {
-      const blocked = temp && p.temp !== temp;
-      return `<div class="pick${blocked ? ' blocked' : ''}"><div class="pick-name">${esc(p.name)} ${tag(p.temp)}${blocked ? `<span class="muted small">　訂單內已有${esc(temp)}商品，不能混單</span>` : ''}</div>
+      const blocked = !(byTemp[p.temp] || [st.delivery]).includes(st.delivery);
+      return `<div class="pick${blocked ? ' blocked' : ''}"><div class="pick-name">${esc(p.name)} ${tag(p.temp)}${blocked ? `<span class="muted small">　${esc(p.temp)}商品不能選「${esc(st.delivery)}」</span>` : ''}</div>
         <div class="pick-vars">${p.variants.filter(v => v.status === '上架').map(v => `<button type="button" class="var-btn" data-var="${esc(v.id)}"${blocked ? ' disabled' : ''}><span>${esc(v.name)}</span><b class="num">${money(v.price)}</b>${v.shippingRule === '限自取' ? '<i>限自取</i>' : v.shippingRule === '特殊確認' ? '<i>寄送需確認</i>' : ''}</button>`).join('')}</div></div>`;
     }).join('');
   }
@@ -1301,8 +1350,8 @@ async function mountNewOrder(view, params) {
       <div class="num cart-sum">${money(i.price * i.quantity)}</div>
       ${st.locked ? '' : `<button type="button" class="icon-btn" data-remove aria-label="移除 ${esc(i.name)} ${esc(i.variant)}" title="移除">${icon('x')}</button>`}
       ${st.locked ? (i.note ? `<div class="cart-note line-note">${esc(i.note)}</div>` : '') : `<input class="input cart-note" maxlength="1000" placeholder="這個商品的備註（選填）" value="${esc(i.note || '')}" aria-label="${esc(i.name)} 備註">`}
-      ${!p && i.rule === '限自取' ? `<div class="cart-warn">這個規格限自取，不能寄送。請改回自取或移除。</div>` : ''}
-      ${!p && i.rule === '特殊確認' && !st.locked ? `<label class="check cart-warn"><input type="checkbox" data-approve${i.approved ? ' checked' : ''}> 已和顧客確認可以寄送</label>` : ''}
+      ${!p && !local() && i.rule === '限自取' ? `<div class="cart-warn">這個規格限自取，不能寄送。請改成自取或外送，或移除。</div>` : ''}
+      ${!p && i.rule === '特殊確認' && !st.locked ? `<label class="check cart-warn"><input type="checkbox" data-approve${i.approved ? ' checked' : ''}> 已和顧客確認可以${local() ? '外送' : '寄送'}</label>` : ''}
     </div>`).join('') : `<p class="muted small empty-cart">還沒有商品。${st.locked ? '' : '請從上方點選規格加入。'}</p>`;
   }
   function renderAddons() {
@@ -1314,10 +1363,11 @@ async function mountNewOrder(view, params) {
   function renderTotals() {
     const c = calc(), paid = o ? o.paid : 0, row = (k, v, cls = '') => `<div class="kv ${cls}"><span>${k}</span><b class="num">${v}</b></div>`;
     $('#no-totals').innerHTML = row('商品小計', money(c.subtotal)) + row('加購小計', money(c.addonTotal))
-      + row('運費' + (!pickup() && !st.locked ? `<small class="muted">　${num($('#no-shipfee')) == null ? (st.delivery === '冷凍宅配' ? `每顆 ${money(S.feePerCake)}` : '整筆') : '手動'}</small>` : ''), money(c.shipping))
+      + row('運費' + (!pickup() && !st.locked ? `<small class="muted">　${num($('#no-shipfee')) != null ? '手動' : local() ? (quoteOk() ? (st.quote.km != null ? `外送 ${st.quote.km} 公里` : '外送') : '尚未計算') : st.delivery === '冷凍宅配' ? `每顆 ${money(S.feePerCake)}` : '整筆'}</small>` : ''), c.pending ? '待計算' : money(c.shipping))
       + row('折扣', (c.discount ? '−' : '') + money(c.discount)) + row('應收總額', money(c.total), 'total' + (c.total < 0 ? ' due' : ''))
       + (editId ? row('已收金額', money(paid)) + row('未收金額', money(Math.max(c.total - paid, 0)), c.total - paid > 0 ? 'due' : '') : '');
-    $('#no-bar-total').textContent = money(c.total);
+    $('#no-bar-total').textContent = money(c.total) + (c.pending ? '＋運費' : '');
+    if (local()) { const w = deliveryWarnings(); if ($('#no-quote-warn')) $('#no-quote-warn').innerHTML = w.length ? `<div class="notice warn">${w.map(esc).join('<br>')}</div>` : ''; }
   }
   function renderAll() { renderDelivery(); renderPicker(); renderCart(); renderAddons(); renderTotals(); }
   const digits = s => String(s).replace(/\D/g, '').replace(/^886/, '').replace(/^0+/, '');
@@ -1331,7 +1381,9 @@ async function mountNewOrder(view, params) {
 
   wrap.addEventListener('click', e => {
     const t = e.target, dl = t.closest('[data-deliv]'), cat = t.closest('[data-cat]'), vb = t.closest('[data-var]'), step = t.closest('[data-step]'), cu = t.closest('[data-cust]'), ad = t.closest('[data-addon]');
-    if (dl) { st.delivery = dl.dataset.deliv; st.touched = true; renderDelivery(); renderCart(); renderAddons(); renderTotals(); }
+    if (dl) { st.delivery = dl.dataset.deliv; st.touched = true; renderDelivery(); renderPicker(); renderCart(); renderAddons(); renderTotals(); if (local() && addrNow() && !quoteOk()) getQuote(); }
+    else if (t.closest('#no-tea')) { st.tea = !st.tea; st.touched = true; $('#no-tea').setAttribute('aria-checked', st.tea); renderAll(); }
+    else if (t.closest('[data-act="quote"]')) getQuote();
     else if (cat) { st.cat = cat.dataset.cat; renderPicker(); }
     else if (vb) {
       const p = products.find(x => x.variants.some(v => v.id === vb.dataset.var)), v = p.variants.find(x => x.id === vb.dataset.var);
@@ -1361,9 +1413,12 @@ async function mountNewOrder(view, params) {
     else if (addon) { const a = st.addons.find(x => x.key === addon.dataset.key); a.name = addon.querySelector('.a-name').value; a.quantity = addon.querySelector('.a-qty').value; a.price = addon.querySelector('.a-price').value; renderTotals(); }
     else if (t.id === 'no-discount' || t.id === 'no-shipfee') renderTotals();
     else if (t.id === 'no-phone' || t.id === 'no-name') renderSuggest();
+    else if (t.id === 'no-addr' && local()) { renderQuote(); renderTotals(); }
     if (!$('#no-err').hidden) showError('');
   });
   wrap.addEventListener('change', e => {
+    // 外送地址輸入完（離開欄位）就自動計算運費。
+    if (e.target.id === 'no-addr' && local() && addrNow() && !quoteOk()) getQuote();
     if (e.target.matches('[data-approve]')) { st.cart.find(x => x.key === e.target.closest('[data-key]').dataset.key).approved = e.target.checked; }
     // 數量欄離開時，把顯示值校正成實際採用的數量（不重畫整個清單，避免和點擊事件互相干擾）。
     if (e.target.matches('.stepper input')) { const i = st.cart.find(x => x.key === e.target.closest('[data-key]').dataset.key); if (i) e.target.value = i.quantity; }
@@ -1377,19 +1432,28 @@ async function mountNewOrder(view, params) {
     const fail = (msg, el) => { showError(msg); if (el) el.focus(); };
     if (!v('#no-phone')) return fail('請輸入聯絡電話。', $('#no-phone'));
     if (!v('#no-name')) return fail('請輸入顧客姓名。', $('#no-name'));
-    if (!v('#no-date')) return fail(`請選擇${pickup() ? '取貨' : '出貨'}日期。`, $('#no-date'));
-    if (pickup() && !v('#no-time')) return fail('請選擇取貨時間。', $('#no-time'));
-    if (!pickup() && !v('#no-addr')) return fail(st.delivery === '常溫超商店到店' ? '請輸入門市名稱。' : '請輸入收件地址。', $('#no-addr'));
-    const base = { name: v('#no-name'), phone: v('#no-phone'), date: v('#no-date'), time: pickup() ? v('#no-time') : '', productionDate: v('#no-prod'), recipient: pickup() ? '' : v('#no-rec'), recipientPhone: pickup() ? '' : v('#no-recphone'), address: pickup() ? '' : v('#no-addr'), note: v('#no-note') };
+    if (!v('#no-date')) return fail(`請選擇${pickup() ? '取貨' : local() ? '送達' : '出貨'}日期。`, $('#no-date'));
+    if ((pickup() || local()) && !v('#no-time')) return fail(pickup() ? '請選擇取貨時間。' : '請選擇送達時間。', $('#no-time'));
+    if (!pickup() && !v('#no-addr')) return fail(st.delivery === '常溫超商店到店' ? '請輸入門市名稱。' : local() ? '請輸入送達地址。' : '請輸入收件地址。', $('#no-addr'));
+    const base = { name: v('#no-name'), phone: v('#no-phone'), date: v('#no-date'), time: pickup() || local() ? v('#no-time') : '', productionDate: v('#no-prod'), recipient: pickup() ? '' : v('#no-rec'), recipientPhone: pickup() ? '' : v('#no-recphone'), address: pickup() ? '' : v('#no-addr'), note: v('#no-note') };
     let content = null;
     if (!st.locked) {
       if (!st.cart.length) return fail('請至少加入一項商品。');
-      if (!pickup() && st.cart.some(i => i.rule === '限自取')) return fail('訂單內有限自取的商品，不能寄送。');
-      if (!pickup() && st.cart.some(i => i.rule === '特殊確認' && !i.approved)) return fail('有商品寄送前需要確認，請勾選「已和顧客確認可以寄送」。');
+      if (!pickup() && !local() && st.cart.some(i => i.rule === '限自取')) return fail('訂單內有限自取的商品，不能寄送。');
+      if (!pickup() && st.cart.some(i => i.rule === '特殊確認' && !i.approved)) return fail(`有商品${local() ? '外送' : '寄送'}前需要確認，請勾選確認。`);
+      if (local() && num($('#no-shipfee')) == null) {
+        if (st.quote && st.quote.address === addrNow() && st.quote.tooFar) return fail(`距離超過 ${DR.maxKm} 公里不外送。`);
+        if (!quoteOk()) return fail('請先按「計算外送運費」，或在金額區手動輸入運費。');
+      }
       for (const a of st.addons) { if (!String(a.name).trim()) return fail('加購品項還沒有名稱（不需要的話請移除）。'); if (!/^\d+$/.test(String(a.quantity)) || Number(a.quantity) < 1) return fail(`加購「${a.name}」的數量請輸入 1 以上的整數。`); if (!/^\d+$/.test(String(a.price))) return fail(`請輸入加購「${a.name}」的單價（免費請填 0）。`); }
       if (c.total < 0) return fail('折扣超過總額。', $('#no-discount'));
       content = { delivery: st.delivery, items: st.cart.map(i => ({ ...(i.detailId ? { detailId: i.detailId } : { variantId: i.variantId }), quantity: i.quantity, note: (i.note || '').trim(), specialShippingApproved: !!i.approved })),
-        addons: st.addons.map(a => ({ name: String(a.name).trim(), quantity: Number(a.quantity), price: Number(a.price) })), discount: c.discount, shippingOverride: pickup() || num($('#no-shipfee')) == null ? null : num($('#no-shipfee')) };
+        addons: st.addons.map(a => ({ name: String(a.name).trim(), quantity: Number(a.quantity), price: Number(a.price) })), discount: c.discount, tea: st.tea,
+        // 外送：送出畫面上確認過的運費（手動或計算結果）與距離，後端照這個金額存，不會再變。
+        shippingOverride: pickup() ? null : num($('#no-shipfee')) != null ? num($('#no-shipfee')) : local() ? st.quote.fee : null,
+        deliveryKm: local() && st.quote && st.quote.address === addrNow() ? st.quote.km : null };
+      const warns = deliveryWarnings();
+      if (warns.length && !(await confirmDialog({ title: '這筆外送有提醒，仍要儲存嗎？', message: warns.join('\n'), okText: '仍要儲存' }))) return;
     }
     let payment = null;
     if (!editId && v('#no-pay') && Number(v('#no-pay')) > 0) { if (Number(v('#no-pay')) > c.total) return fail('本次收款超過應收總額。', $('#no-pay')); payment = { amount: Number(v('#no-pay')), method: v('#no-method') }; }
@@ -1402,7 +1466,7 @@ async function mountNewOrder(view, params) {
       if (editId) { toast('訂單已更新'); location.hash = '#/orders'; openOrder(saved.order.id); return; }
       const so = saved.order;
       wrap.innerHTML = `<div class="card done"><div class="done-mark">✓</div><h2>訂單已建立</h2><p class="done-id num">${esc(so.id)}</p>
-        <p>${esc(so.name)}・${esc(so.delivery)}・${esc(fmtDay(so.date))}${so.time ? ' ' + esc(so.time) : ''}</p><p>${esc(so.summary)}</p>
+        <p>${so.tea ? tag('茶會') + ' ' : ''}${esc(so.name)}・${esc(so.delivery)}・${esc(fmtDay(so.date))}${so.time ? ' ' + esc(so.time) : ''}</p><p>${esc(so.summary)}</p>
         <p>應收 <b class="num">${money(so.total)}</b>・已收 <b class="num">${money(so.paid)}</b>・${tag(so.status)}${tag(so.payStatus)}</p>
         <div class="btn-row center"><button type="button" class="btn btn-primary" data-act="again">再新增一筆</button><button type="button" class="btn" data-act="view">查看這筆訂單</button><a class="btn" href="#/orders">回訂單列表</a></div></div>`;
       wrap.querySelector('[data-act="again"]').addEventListener('click', () => mountNewOrder(view, {}));
